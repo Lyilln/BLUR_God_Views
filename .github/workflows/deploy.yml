@@ -3,12 +3,10 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: ["main"]
-    paths-ignore:
-      - "package-lock.json"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -23,28 +21,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: MARKER - I AM THE NEW WORKFLOW
+        run: |
+          echo "NEW WORKFLOW LOADED ✅"
+          node -v || true
+          npm -v || true
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
-      # 1) 用 npm install 先把 lockfile 產出來（沒有 lock 也不會死）
-      - name: Install (create lockfile)
+      - name: Install (NO CI)
         run: npm install --no-audit --no-fund
-
-      # 2) 把 package-lock.json 推回 repo（如果有變）
-      - name: Commit package-lock.json (if changed)
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git diff --cached --quiet || git commit -m "chore: add package-lock.json"
-          git push
-
-      # 3) 現在 lockfile 一定存在了，改用 npm ci 走穩定安裝
-      - name: Install (clean)
-        run: npm ci --no-audit --no-fund
 
       - name: Build
         run: npm run build
