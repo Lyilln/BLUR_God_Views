@@ -95,6 +95,18 @@ export default function App() {
     document.documentElement.classList.toggle('dark', darkMode);
   }, [darkMode]);
 
+  const clearCurrentHistory = useCallback(() => {
+    const key = activeScene === 'dm'
+      ? `dm:${[...selectedMembers].sort().join('-')}`
+      : (subScene || activeScene);
+
+    setSceneHistory(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, [activeScene, subScene, selectedMembers]);
+
   const runSimulation = useCallback(async (customCmd?: string) => {
     if (isGenerating) return;
     setIsGenerating(true);
@@ -110,7 +122,13 @@ export default function App() {
       if (block.events) {
         setSceneHistory(p => ({ ...p, [key]: [...(p[key] || []), ...block.events] }));
       }
-    } catch (e) { console.error(e); } finally { 
+    } catch (e: any) {
+      console.error(e);
+      const msg = String(e?.message || e || '');
+      if (msg.includes('NO_API_KEY')) {
+        alert('你還沒設定 Gemini API Key～先按右上角 🔑 放一下鑰匙再生成 ✅');
+      }
+    } finally { 
       setIsGenerating(false); 
       setDirectorCommand(''); 
     }
@@ -352,7 +370,16 @@ export default function App() {
               >
                 <Filter size={16} />
               </button>
-              <button onClick={() => runSimulation()} disabled={isGenerating} className="p-2.5 border rounded-xl bg-white dark:bg-slate-800 text-indigo-600 hover:rotate-180 transition-transform duration-500 disabled:opacity-50 shadow-sm"><RefreshCw size={16} /></button>
+
+              <button
+                onClick={clearCurrentHistory}
+                className="p-2.5 border rounded-xl bg-white dark:bg-slate-800 text-indigo-600 hover:rotate-180 transition-transform duration-500 shadow-sm"
+                title="清空本頁紀錄（刷新）"
+                aria-label="清空本頁紀錄（刷新）"
+              >
+                <RefreshCw size={16} />
+              </button>
+
               <button
                 onClick={() => window.openSelectKey?.()}
                 className="p-2.5 rounded-xl border transition-all bg-white dark:bg-slate-800 text-indigo-600 shadow-sm"
