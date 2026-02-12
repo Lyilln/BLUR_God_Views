@@ -73,12 +73,22 @@ export default function App() {
   const feedRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('blur_v8_history');
-    const savedRel = localStorage.getItem('blur_v8_rel');
-    if (saved) setSceneHistory(JSON.parse(saved));
-    if (savedRel) setRelationships(JSON.parse(savedRel));
-    if (window.matchMedia('(prefers-color-scheme: dark)').matches) setDarkMode(true);
-  }, []);
+  const saved = localStorage.getItem('blur_v8_history');
+  const savedRel = localStorage.getItem('blur_v8_rel');
+  if (saved) setSceneHistory(JSON.parse(saved));
+  if (savedRel) setRelationships(JSON.parse(savedRel));
+  if (window.matchMedia('(prefers-color-scheme: dark)').matches) setDarkMode(true);
+
+  // ✅ 讓右上角鑰匙「真的會跳輸入框」
+  (window as any).openSelectKey = () => {
+    const current = localStorage.getItem('GEMINI_API_KEY') || '';
+    const next = window.prompt('貼上你的 Gemini API Key', current);
+    if (!next) return null;
+    localStorage.setItem('GEMINI_API_KEY', next.trim());
+    alert('已儲存 ✅');
+    return next.trim();
+  };
+}, []);
 
   useEffect(() => {
     localStorage.setItem('blur_v8_history', JSON.stringify(sceneHistory));
@@ -350,7 +360,7 @@ export default function App() {
               <button onClick={() => runSimulation()} disabled={isGenerating} className="p-2.5 border rounded-xl bg-white dark:bg-slate-800 text-indigo-600 hover:rotate-180 transition-transform duration-500 disabled:opacity-50 shadow-sm"><RefreshCw size={16} /></button>
               <button
   onClick={() => (window as any).openSelectKey?.()}
-  className="p-2.5 border rounded-xl bg-white dark:bg-slate-800 text-indigo-600 transition-all shadow-sm"
+  className="p-2.5 rounded-xl border transition-all bg-white dark:bg-slate-800 text-indigo-600 shadow-sm"
   title="設定 API Key"
   aria-label="設定 API Key"
 >
