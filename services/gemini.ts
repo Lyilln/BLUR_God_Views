@@ -178,9 +178,16 @@ const ai = new GoogleGenAI({ apiKey: finalKey });
 
     return JSON.parse(response.text || "{}") as SimulationBlock;
   } catch (error: any) {
-    if (error?.message?.includes("Requested entity was not found.")) {
-      if (window.aistudio) await (window.aistudio as any).openSelectKey();
+  const msg = String(error?.message || "");
+  if (typeof window !== "undefined" && window.openSelectKey) {
+    if (
+      msg.includes("Requested entity was not found.") ||
+      msg.includes("API key") ||
+      msg.includes("apiKey") ||
+      msg.includes("NO_API_KEY")
+    ) {
+      await window.openSelectKey();
     }
-    throw error;
   }
+  throw error;
 }
