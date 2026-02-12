@@ -9,7 +9,18 @@ export async function generateSimulation(
   command: string,
   context?: { subScene?: string; history?: any[]; relationships?: any[] }
 ): Promise<SimulationBlock> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const storedKey =
+  (typeof window !== "undefined" && window.localStorage)
+    ? (localStorage.getItem("GEMINI_API_KEY") || "").trim()
+    : "";
+
+const apiKey = storedKey || ((process.env as any)?.API_KEY || "");
+
+if (!apiKey) {
+  throw new Error("NO_API_KEY");
+}
+
+const ai = new GoogleGenAI({ apiKey });
   
   const relContext = context?.relationships 
     ? context.relationships.map(r => `${r.from}-${r.to}: ${r.type}(${r.level}%): ${r.note}`).join('\n')
