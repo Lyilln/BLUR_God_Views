@@ -1,12 +1,12 @@
 {
-  "name": "BLUR God Views",
+  "name": "BLUR GOD VIEW | 模擬引擎",
   "short_name": "BLUR",
   "start_url": "/BLUR_God_Views/",
   "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#000000",
+  "background_color": "#b48cff",
+  "theme_color": "#b48cff",
   "icons": [
-    { "src": "/BLUR_God_Views/pwa-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/BLUR_God_Views/pwa-512.png", "sizes": "512x512", "type": "image/png" }
+    { "src": "/BLUR_God_Views/pwa-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/BLUR_God_Views/pwa-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }
