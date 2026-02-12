@@ -83,6 +83,15 @@ export default function App() {
     if (saved) setSceneHistory(JSON.parse(saved));
     if (savedRel) setRelationships(JSON.parse(savedRel));
     if (window.matchMedia('(prefers-color-scheme: dark)').matches) setDarkMode(true);
+    (window as any).openSelectKey = async () => {
+    const current = localStorage.getItem("GEMINI_API_KEY") || "";
+    const next = window.prompt("貼上你的 Gemini API Key", current);
+    if (next === null) return null;
+    const v = next.trim();
+    if (v) localStorage.setItem("GEMINI_API_KEY", v);
+    else localStorage.removeItem("GEMINI_API_KEY");
+    return v || null;
+};
   }, []);
 
   useEffect(() => {
