@@ -348,7 +348,14 @@ export default function App() {
                 <Filter size={16} />
               </button>
               <button onClick={() => runSimulation()} disabled={isGenerating} className="p-2.5 border rounded-xl bg-white dark:bg-slate-800 text-indigo-600 hover:rotate-180 transition-transform duration-500 disabled:opacity-50 shadow-sm"><RefreshCw size={16} /></button>
-              <button onClick={() => (window.aistudio as any)?.openSelectKey()} className="p-2.5 border rounded-xl bg-white dark:bg-slate-800 shadow-sm"><Key size={16} /></button>
+              <button
+  onClick={() => (window as any).openSelectKey?.()}
+  className="p-2.5 border rounded-xl bg-white dark:bg-slate-800 text-indigo-600 transition-all shadow-sm"
+  title="設定 API Key"
+  aria-label="設定 API Key"
+>
+  <Key size={16} />
+</button>
             </div>
           </div>
 
