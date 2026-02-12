@@ -10,6 +10,7 @@ declare global {
 
 const KEY_NAME = "GEMINI_API_KEY";
 
+// === Key storage ===
 function getStoredKey() {
   if (typeof window === "undefined") return "";
   return (localStorage.getItem(KEY_NAME) || "").trim();
@@ -58,6 +59,98 @@ async function requireKey(): Promise<string> {
   return key;
 }
 
+// === Persona selection (fast + accurate) ===
+// Strategy:
+// 1) Use explicit participants from recent history events (cheap + accurate)
+// 2) Use explicit speaker from recent history events (cheap + accurate)
+// 3) Scene-based fallback seeds (dm/group_chat wants fewer; stage/variety wants more)
+// No weak substring scanning across text blobs.
+type HistoryEventLike = {
+  participants?: any[];
+  content?: { speaker?: any };
+};
+
+function uniqueInOrder(xs: string[], limit: number): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const x of xs) {
+    const s = String(x || "").trim();
+    if (!s) continue;
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function pickNeededNames(
+  scene: SceneType,
+  history: any[] | undefined,
+  allNames: string[],
+  limit?: number
+): string[] {
+  const max =
+    typeof limit === "number"
+      ? limit
+      : scene === "dm"
+      ? 3
+      : scene === "group_chat"
+      ? 6
+      : scene === "stage" || scene === "variety"
+      ? 8
+      : 6;
+
+  const recent = (history || []).slice(-20) as HistoryEventLike[];
+
+  const explicit: string[] = [];
+
+  // 先抓 participants（最準）
+  for (const ev of recent) {
+    const parts = Array.isArray(ev?.participants) ? ev.participants : [];
+    for (const p of parts) explicit.push(String(p || ""));
+  }
+
+  // 再抓 speaker（次準）
+  for (const ev of recent) {
+    const sp = ev?.content?.speaker;
+    if (sp) explicit.push(String(sp));
+  }
+
+  // 過濾成「存在於 PERSONA_DATA 的名字」
+  const filtered = explicit
+    .map(s => s.trim())
+    .filter(s => s && allNames.includes(s));
+
+  const picked = uniqueInOrder(filtered, max);
+
+  // fallback：如果完全抓不到（例如新頁面第一輪）
+  if (picked.length === 0) {
+    // dm / group_chat：優先給前三～六個，避免塞爆
+    // stage/variety：多給一點
+    return allNames.slice(0, max);
+  }
+
+  // 如果不足 max，補一些常駐角色（穩定/主持/路人之類你放在 PERSONA_DATA 前面那幾個）
+  if (picked.length < Math.min(max, allNames.length)) {
+    const need = max - picked.length;
+    const fillers = allNames.filter(n => !picked.includes(n)).slice(0, need);
+    return picked.concat(fillers);
+  }
+
+  return picked;
+}
+
+function buildPersonaContext(neededNames: string[]): string {
+  return neededNames
+    .filter(n => PERSONA_DATA[n])
+    .map(n => {
+      const p: any = (PERSONA_DATA as any)[n];
+      return `${p.name}: ${p.traits} Speech: ${p.speech}`;
+    })
+    .join("\n");
+}
+
 export async function generateSimulation(
   scene: SceneType,
   settings: Settings,
@@ -73,9 +166,11 @@ export async function generateSimulation(
         .join("\n")
     : "Standard relationships.";
 
-  const personaContext = Object.values(PERSONA_DATA)
-    .map((p: any) => `${p.name}: ${p.traits} Speech: ${p.speech}`)
-    .join("\n");
+  const allNames = Object.keys(PERSONA_DATA);
+
+  // ✅ only pick the personas we likely need this round (fast + accurate)
+  const neededNames = pickNeededNames(scene, context?.history, allNames);
+  const personaContext = buildPersonaContext(neededNames);
 
   let sceneSpecificInstruction = "";
 
@@ -120,7 +215,7 @@ export async function generateSimulation(
   const systemInstruction = `
     You are the 'BLUR GOD VIEW' Engine.
     Worldview: ${WORLD_VIEW.concept}.
-    Profiles:\n${personaContext}\n
+    Profiles (selected this round):\n${personaContext}\n
     Current Relationships:\n${relContext}\n
 
     Current Setting: ${scene}.
