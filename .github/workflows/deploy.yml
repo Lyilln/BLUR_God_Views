@@ -1,4 +1,4 @@
-name: Deploy to GitHub Pages
+name: Deploy to GitHub Pages (Bootstrap Lockfile)
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -21,20 +21,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: MARKER - I AM THE NEW WORKFLOW
-        run: |
-          echo "NEW WORKFLOW LOADED ✅"
-          node -v || true
-          npm -v || true
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install (NO CI)
+      # 1) 產生 lockfile（必要時才會更新）
+      - name: Install (creates package-lock.json)
         run: npm install --no-audit --no-fund
 
+      # 2) 推回 repo（如果 lockfile 有變）
+      - name: Commit package-lock.json (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git diff --cached --quiet || git commit -m "chore: add package-lock.json"
+          git push
+
+      # 3) 用剛安裝好的依賴直接 build（這次先不碰 npm ci）
       - name: Build
         run: npm run build
 
