@@ -1,7 +1,34 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { SimulationBlock, Settings, SceneType } from "../types";
 import { PERSONA_DATA, WORLD_VIEW } from "../constants";
+declare global {
+  interface Window {
+    openSelectKey?: () => Promise<void> | void;
+  }
+}
+
+function getStoredKey() {
+  if (typeof window === "undefined") return "";
+  return (localStorage.getItem("GEMINI_API_KEY") || "").trim();
+}
+
+function setStoredKey(v: string) {
+  if (typeof window === "undefined") return;
+  const key = (v || "").trim();
+  if (key) localStorage.setItem("GEMINI_API_KEY", key);
+  else localStorage.removeItem("GEMINI_API_KEY");
+}
+
+// 讓 UI（右上角鑰匙）可以直接呼叫
+if (typeof window !== "undefined") {
+  window.openSelectKey = async () => {
+    const current = getStoredKey();
+    const k = prompt("貼上你的 GEMINI API KEY：", current);
+    if (k === null) return;
+    setStoredKey(k);
+    alert(k.trim() ? "已儲存 ✅" : "已清除 API KEY");
+  };
+}
 
 export async function generateSimulation(
   scene: SceneType,
