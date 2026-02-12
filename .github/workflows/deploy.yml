@@ -31,7 +31,7 @@ jobs:
 
       - name: Generate package-lock.json if missing
         run: |
-          npm install --package-lock-only --no-audit --no-fund
+          npm install --no-audit --no-fund
 
       - name: Commit package-lock.json (if created/updated)
         run: |
