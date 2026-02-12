@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <link rel="apple-touch-icon" href="/BLUR_God_Views/apple-touch-icon.PNG" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <link rel="manifest" href="/BLUR_God_Views/manifest.webmanifest" />
     <meta name="theme-color" content="#000000" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -65,5 +65,24 @@
 <body class="bg-[#F8F9FA] text-[#2D3436] dark:bg-slate-950 dark:text-slate-200 transition-colors duration-300">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
+    
+    <style>
+  :root{
+    --safe-top: env(safe-area-inset-top);
+    --safe-right: env(safe-area-inset-right);
+    --safe-bottom: env(safe-area-inset-bottom);
+    --safe-left: env(safe-area-inset-left);
+  }
+  html, body { height: 100%; }
+  body{
+    margin: 0;
+    padding-top: var(--safe-top);
+    padding-right: var(--safe-right);
+    padding-bottom: var(--safe-bottom);
+    padding-left: var(--safe-left);
+    box-sizing: border-box;
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+</style>
 </body>
 </html>
