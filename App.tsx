@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   Users, MessageSquare, Play, Home, Music, 
@@ -11,6 +10,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { SceneType, SimulationEvent, Settings, SimulationBlock, RelationshipLink, ForumReply } from './types';
 import { PERSONA_DATA, INITIAL_RELATIONSHIPS, MUSIC_SHOWS, VARIETY_SHOWS, FORUM_BOARDS } from './constants';
 import { generateSimulation } from './services/gemini';
+
+declare global {
+  interface Window {
+    openSelectKey?: () => Promise<string | null> | string | null;
+  }
+}
 
 const SCENE_BG: Record<SceneType, string> = {
   group_chat: 'bg-slate-50 dark:bg-slate-950',
@@ -73,22 +78,12 @@ export default function App() {
   const feedRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-  const saved = localStorage.getItem('blur_v8_history');
-  const savedRel = localStorage.getItem('blur_v8_rel');
-  if (saved) setSceneHistory(JSON.parse(saved));
-  if (savedRel) setRelationships(JSON.parse(savedRel));
-  if (window.matchMedia('(prefers-color-scheme: dark)').matches) setDarkMode(true);
-
-  // ✅ 讓右上角鑰匙「真的會跳輸入框」
-  (window as any).openSelectKey = () => {
-    const current = localStorage.getItem('GEMINI_API_KEY') || '';
-    const next = window.prompt('貼上你的 Gemini API Key', current);
-    if (!next) return null;
-    localStorage.setItem('GEMINI_API_KEY', next.trim());
-    alert('已儲存 ✅');
-    return next.trim();
-  };
-}, []);
+    const saved = localStorage.getItem('blur_v8_history');
+    const savedRel = localStorage.getItem('blur_v8_rel');
+    if (saved) setSceneHistory(JSON.parse(saved));
+    if (savedRel) setRelationships(JSON.parse(savedRel));
+    if (window.matchMedia('(prefers-color-scheme: dark)').matches) setDarkMode(true);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('blur_v8_history', JSON.stringify(sceneHistory));
@@ -359,13 +354,13 @@ export default function App() {
               </button>
               <button onClick={() => runSimulation()} disabled={isGenerating} className="p-2.5 border rounded-xl bg-white dark:bg-slate-800 text-indigo-600 hover:rotate-180 transition-transform duration-500 disabled:opacity-50 shadow-sm"><RefreshCw size={16} /></button>
               <button
-  onClick={() => (window as any).openSelectKey?.()}
-  className="p-2.5 rounded-xl border transition-all bg-white dark:bg-slate-800 text-indigo-600 shadow-sm"
-  title="設定 API Key"
-  aria-label="設定 API Key"
->
-  <Key size={16} />
-</button>
+                onClick={() => window.openSelectKey?.()}
+                className="p-2.5 rounded-xl border transition-all bg-white dark:bg-slate-800 text-indigo-600 shadow-sm"
+                title="設定 API Key"
+                aria-label="設定 API Key"
+              >
+                <Key size={16} />
+              </button>
             </div>
           </div>
 
