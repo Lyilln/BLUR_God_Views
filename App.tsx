@@ -47,6 +47,23 @@ const save = (key: string, v: unknown) => {
   try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* 容量滿或私密模式 */ }
 };
 
+// 其他場景最近的事，讓各場景是同一個世界
+const keyLabel = (k: string) =>
+  k.startsWith('dm:') ? `私訊 ${k.slice(3).replace('-', '×')}` : (SCENE_LABELS[k as SceneType] || k);
+
+function elsewhereLines(history: Record<string, SimulationEvent[]>, currentKey: string): string[] {
+  const out: string[] = [];
+  for (const [k, evs] of Object.entries(history)) {
+    if (k === currentKey || !evs?.length) continue;
+    evs.filter(e => e.eventType !== 'scene_change').slice(-4).forEach(e => {
+      const c = e.content || {};
+      const body = e.eventType === 'forum_post' ? `論壇文〈${c.title || ''}〉` : `${c.speaker ? c.speaker + '：' : ''}${c.text || c.action || ''}`;
+      if (body.trim()) out.push(`[${keyLabel(k)}] ${body.slice(0, 70)}`);
+    });
+  }
+  return out.slice(-24);
+}
+
 const initialNodes = () => {
   const out: Record<string, { x: number; y: number }> = {};
   MEMBERS.forEach((n, i) => {
@@ -142,6 +159,7 @@ export default function App() {
     try {
       const block = await generateSimulation(scene, cmd, {
         subScene, history: history[historyKey], relationships, dmPair: scene === 'dm' ? dmPair : undefined,
+        elsewhere: elsewhereLines(history, historyKey),
       });
       const add: SimulationEvent[] = [];
       if (!isChat && block.scene.locationLabel) {
