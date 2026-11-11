@@ -1,563 +1,597 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { 
-  Users, MessageSquare, Play, Home, Music, 
-  Tv, Building2, Mic, Globe, X, Menu, Sun, Moon, 
-  Sparkles, Zap, Heart, RefreshCw, Key, Loader2, Ghost, ArrowLeftRight, Pause,
-  Filter, Send, RotateCcw, UserPlus, Info, ChevronDown, Layout, Edit3, Save, Trash2,
-  Settings as SettingsIcon, Link2
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  MessageCircle, Home, Mic, Newspaper, Users, Settings as SettingsIcon, RotateCcw,
+  ArrowUp, Loader2, Sparkles, Eye, EyeOff, X, Plus, Trash2, Play, Clapperboard
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { SceneType, SimulationEvent, Settings, SimulationBlock, RelationshipLink, ForumReply } from './types';
-import { PERSONA_DATA, INITIAL_RELATIONSHIPS, MUSIC_SHOWS, VARIETY_SHOWS, FORUM_BOARDS } from './constants';
-import { generateSimulation } from './services/gemini';
+import { SceneType, SimulationEvent, RelationshipLink } from './types';
+import { PERSONA_DATA, INITIAL_RELATIONSHIPS, MUSIC_SHOWS, VARIETY_SHOWS, FORUM_BOARDS, MEMBER_COLORS } from './constants';
+import {
+  generateSimulation, SimError, ERROR_TEXT, MODELS,
+  getApiKey, setApiKey, getModel, setModel
+} from './services/claude';
 
-declare global {
-  interface Window {
-    openSelectKey?: () => Promise<string | null> | string | null;
-  }
-}
+// ===== 設定 =====
+type Tab = 'chat' | 'daily' | 'show' | 'forum' | 'map';
 
-const SCENE_BG: Record<SceneType, string> = {
-  group_chat: 'bg-slate-50 dark:bg-slate-950',
-  dm: 'bg-white dark:bg-slate-950',
-  practice_room: 'bg-zinc-100 dark:bg-zinc-900',
-  dorm: 'bg-orange-50/10 dark:bg-neutral-950',
-  stage: 'bg-black',
-  variety: 'bg-emerald-50/10 dark:bg-slate-950',
-  company: 'bg-slate-50 dark:bg-slate-950',
-  studio: 'bg-indigo-50/10 dark:bg-slate-950',
-  forum: 'bg-gray-100 dark:bg-gray-950',
-  relationship_map: 'bg-slate-950'
-};
+const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }>; scenes: SceneType[] }[] = [
+  { id: 'chat', label: '聊天', icon: MessageCircle, scenes: ['group_chat', 'dm'] },
+  { id: 'daily', label: '日常', icon: Home, scenes: ['practice_room', 'dorm', 'studio', 'company'] },
+  { id: 'show', label: '舞台', icon: Mic, scenes: ['stage', 'variety'] },
+  { id: 'forum', label: '論壇', icon: Newspaper, scenes: ['forum'] },
+  { id: 'map', label: '關係', icon: Users, scenes: ['relationship_map'] },
+];
 
 const SCENE_LABELS: Record<SceneType, string> = {
-  group_chat: '團體聊天室', dm: '私密監控', practice_room: '練習室',
-  dorm: '宿舍', stage: '打歌舞台', variety: '綜藝節目', company: '經紀公司',
-  studio: '錄音室', forum: '粉絲論壇', relationship_map: '關係圖譜'
+  group_chat: '團體聊天室', dm: '私訊', practice_room: '練習室', dorm: '宿舍',
+  studio: '錄音室', company: '經紀公司', stage: '打歌舞台', variety: '綜藝',
+  forum: '粉絲論壇', relationship_map: '關係圖譜',
 };
 
-const CHARACTER_ANIMATIONS: Record<string, any> = {
-  Chloe: { rotate: [0, 5, -5, 0], transition: { repeat: Infinity, duration: 1.5 } },
-  RAHI: { y: [0, -10, 0], transition: { repeat: Infinity, duration: 0.8 } },
-  Nanae: { opacity: [1, 0.7, 1], transition: { repeat: Infinity, duration: 3 } },
-  Yeongri: { scale: [1, 1.02, 1], transition: { repeat: Infinity, duration: 2 } },
-  Sera: { x: [0, 2, -2, 0], transition: { repeat: Infinity, duration: 4 } },
+const SUB_OPTIONS: Partial<Record<SceneType, string[]>> = {
+  stage: MUSIC_SHOWS, variety: VARIETY_SHOWS, forum: FORUM_BOARDS,
 };
 
-// 用於計算關係圖座標的 Helper
-const getInitialNodePos = (index: number, total: number, radius: number) => {
-  const angle = (index / total) * Math.PI * 2 - Math.PI / 2;
-  return {
-    x: Math.cos(angle) * radius,
-    y: Math.sin(angle) * radius
-  };
+const REPLY_LABEL: Record<string, string> = {
+  fan: '理性粉', hater: '黑粉', neutral: '路人', shipper: 'CP粉', mom_fan: '媽媽粉',
 };
 
-export default function App() {
-  const [activeScene, setActiveScene] = useState<SceneType>('group_chat');
-  const [subScene, setSubScene] = useState<string>('');
-  const [selectedMembers, setSelectedMembers] = useState<string[]>(['Chloe', 'RAHI']);
-  const [sceneHistory, setSceneHistory] = useState<Record<string, SimulationEvent[]>>({});
-  const [directorCommand, setDirectorCommand] = useState('');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [relationships, setRelationships] = useState<RelationshipLink[]>(INITIAL_RELATIONSHIPS);
-  const [isEditingRel, setIsEditingRel] = useState(false);
-  const [filterType, setFilterType] = useState<string | null>(null);
+const MEMBERS = Object.keys(PERSONA_DATA);
+const MAP_SIZE = 340;
+const MAP_R = 118;
 
-  // 關係圖節點位置狀態 (用於連線)
-  const [nodePositions, setNodePositions] = useState<Record<string, { x: number; y: number }>>(() => {
-    const initialPos: Record<string, { x: number; y: number }> = {};
-    Object.keys(PERSONA_DATA).forEach((name, i) => {
-      initialPos[name] = getInitialNodePos(i, 5, 120);
-    });
-    return initialPos;
+const load = <T,>(key: string, fallback: T): T => {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? (JSON.parse(v) as T) : fallback;
+  } catch { return fallback; }
+};
+const save = (key: string, v: unknown) => {
+  try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* 容量滿或私密模式 */ }
+};
+
+const initialNodes = () => {
+  const out: Record<string, { x: number; y: number }> = {};
+  MEMBERS.forEach((n, i) => {
+    const a = (i / MEMBERS.length) * Math.PI * 2 - Math.PI / 2;
+    out[n] = { x: Math.cos(a) * MAP_R, y: Math.sin(a) * MAP_R };
   });
-  
-  const feedRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const saved = localStorage.getItem('blur_v8_history');
-    const savedRel = localStorage.getItem('blur_v8_rel');
-    if (saved) setSceneHistory(JSON.parse(saved));
-    if (savedRel) setRelationships(JSON.parse(savedRel));
-    if (window.matchMedia('(prefers-color-scheme: dark)').matches) setDarkMode(true);
-    (window as any).openSelectKey = async () => {
-    const current = localStorage.getItem("GEMINI_API_KEY") || "";
-    const next = window.prompt("貼上你的 Gemini API Key", current);
-    if (next === null) return null;
-    const v = next.trim();
-    if (v) localStorage.setItem("GEMINI_API_KEY", v);
-    else localStorage.removeItem("GEMINI_API_KEY");
-    return v || null;
+  return out;
 };
+
+// ===== 小元件 =====
+function Avatar({ name, size }: { name?: string; size?: 'xs' | 'lg' }) {
+  const c = name ? MEMBER_COLORS[name] : undefined;
+  return (
+    <div
+      className={`av ${size || ''} ${c ? '' : 'npc'}`}
+      style={c ? { background: `linear-gradient(135deg, ${c[0]}, ${c[1]})` } : undefined}
+    >
+      {(name || '?').slice(0, 1).toUpperCase()}
+    </div>
+  );
+}
+
+function Sheet({ open, onClose, children }: { open: boolean; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div className="scrim" onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+          <motion.div
+            className="sheet"
+            initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
+            transition={{ type: 'spring', damping: 30, stiffness: 320 }}
+          >
+            <div className="grab" />
+            {children}
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
+  );
+}
+
+// ===== 主程式 =====
+export default function App() {
+  const [tab, setTab] = useState<Tab>('chat');
+  const [tabScene, setTabScene] = useState<Record<Tab, SceneType>>({
+    chat: 'group_chat', daily: 'practice_room', show: 'stage', forum: 'forum', map: 'relationship_map',
+  });
+  const [subScenes, setSubScenes] = useState<Partial<Record<SceneType, string>>>({});
+  const [dmPair, setDmPair] = useState<string[]>(['Chloe', 'RAHI']);
+  const [history, setHistory] = useState<Record<string, SimulationEvent[]>>(() => load('blur_v8_history', {}));
+  const [relationships, setRelationships] = useState<RelationshipLink[]>(() => load('blur_v8_rel', INITIAL_RELATIONSHIPS));
+  const [nodes, setNodes] = useState(() => load('blur_v9_nodes', initialNodes()));
+  const [command, setCommand] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<{ text: string; action?: { label: string; run: () => void } } | null>(null);
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [keyDraft, setKeyDraft] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [modelDraft, setModelDraft] = useState(getModel());
+  const [hasKey, setHasKey] = useState(() => !!getApiKey());
+
+  const [relEdit, setRelEdit] = useState<{ index: number; draft: RelationshipLink } | null>(null);
+
+  const feedRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ name: string; sx: number; sy: number; ox: number; oy: number } | null>(null);
+
+  const scene = tabScene[tab];
+  const subScene = subScenes[scene] || SUB_OPTIONS[scene]?.[0] || '';
+  const historyKey = scene === 'dm' ? `dm:${[...dmPair].sort().join('-')}` : (subScene || scene);
+  const events = history[historyKey] || [];
+  const isChat = scene === 'group_chat' || scene === 'dm';
+
+  // 儲存
+  useEffect(() => save('blur_v8_history', history), [history]);
+  useEffect(() => save('blur_v8_rel', relationships), [relationships]);
+  useEffect(() => save('blur_v9_nodes', nodes), [nodes]);
+
+  // 新內容自動捲到底
+  useEffect(() => {
+    const el = feedRef.current;
+    if (el) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }, [events.length, busy, historyKey]);
+
+  // toast 自動消失
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const openSettings = useCallback(() => {
+    setKeyDraft(getApiKey());
+    setModelDraft(getModel());
+    setShowKey(false);
+    setSettingsOpen(true);
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem('blur_v8_history', JSON.stringify(sceneHistory));
-    localStorage.setItem('blur_v8_rel', JSON.stringify(relationships));
-    if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
-  }, [sceneHistory, relationships]);
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', darkMode);
-  }, [darkMode]);
-
-  const clearCurrentHistory = useCallback(() => {
-    const key = activeScene === 'dm'
-      ? `dm:${[...selectedMembers].sort().join('-')}`
-      : (subScene || activeScene);
-
-    setSceneHistory(prev => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-  }, [activeScene, subScene, selectedMembers]);
-
-  const runSimulation = useCallback(async (customCmd?: string) => {
-    if (isGenerating) return;
-    setIsGenerating(true);
-    const key = activeScene === 'dm' ? `dm:${[...selectedMembers].sort().join('-')}` : (subScene || activeScene);
-    
-    try {
-      const block = await generateSimulation(
-        activeScene, 
-        { speed: 'medium', autonomous: true } as Settings, 
-        customCmd || directorCommand,
-        { subScene, history: sceneHistory[key], relationships }
-      );
-      if (block.events) {
-        setSceneHistory(p => ({ ...p, [key]: [...(p[key] || []), ...block.events] }));
-      }
-    } catch (e: any) {
-      console.error(e);
-      const msg = String(e?.message || e || '');
-      if (msg.includes('NO_API_KEY')) {
-        alert('你還沒設定 Gemini API Key～先按右上角 🔑 放一下鑰匙再生成 ✅');
-      } else if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-        alert('API 額度用完了（429），等一下再試，或換一把 Key。');
-      } else {
-        alert('生成失敗：' + msg.slice(0, 200));
-      }
-    } finally { 
-      setIsGenerating(false); 
-      setDirectorCommand(''); 
-    }
-  }, [activeScene, subScene, selectedMembers, directorCommand, isGenerating, sceneHistory, relationships]);
-
-  const currentKey = activeScene === 'dm' ? `dm:${[...selectedMembers].sort().join('-')}` : (subScene || activeScene);
-  const currentEvents = useMemo(() => {
-    const events = sceneHistory[currentKey] || [];
-    if (!filterType) return events;
-    return events.filter(e => e.eventType === filterType);
-  }, [sceneHistory, currentKey, filterType]);
-
-  const updateRelationship = (index: number, field: keyof RelationshipLink, value: any) => {
-    const newRels = [...relationships];
-    newRels[index] = { ...newRels[index], [field]: value };
-    setRelationships(newRels);
+  const saveSettings = () => {
+    setApiKey(keyDraft);
+    setModel(modelDraft);
+    setHasKey(!!keyDraft.trim());
+    setSettingsOpen(false);
+    setToast({ text: keyDraft.trim() ? '設定已儲存' : '已清除 API Key' });
   };
 
-  const RelationshipMap = () => {
-    const containerRef = useRef<HTMLDivElement>(null);
+  const run = useCallback(async (custom?: string) => {
+    if (busy || scene === 'relationship_map') return;
+    if (!getApiKey()) {
+      setToast({ text: ERROR_TEXT.NO_KEY, action: { label: '去設定', run: openSettings } });
+      return;
+    }
+    const cmd = custom ?? command;
+    setBusy(true);
+    setCommand('');
+    try {
+      const block = await generateSimulation(scene, cmd, {
+        subScene, history: history[historyKey], relationships, dmPair: scene === 'dm' ? dmPair : undefined,
+      });
+      const add: SimulationEvent[] = [];
+      if (!isChat && block.scene.locationLabel) {
+        add.push({
+          eventId: `${block.sessionId}-loc`, ts: '', eventType: 'scene_change', participants: [],
+          content: { text: block.scene.locationLabel },
+        });
+      }
+      add.push(...block.events);
+      setHistory(p => ({ ...p, [historyKey]: [...(p[historyKey] || []), ...add] }));
+    } catch (e) {
+      console.error(e);
+      setCommand(cmd);
+      if (e instanceof SimError) {
+        const needSettings = e.code === 'NO_KEY' || e.code === 'BAD_KEY';
+        setToast({ text: e.message, action: needSettings ? { label: '去設定', run: openSettings } : undefined });
+      } else {
+        setToast({ text: `生成失敗：${String((e as Error)?.message || e).slice(0, 80)}` });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, scene, command, subScene, history, historyKey, relationships, dmPair, isChat, openSettings]);
 
-    return (
-      <div ref={containerRef} className="relative w-full h-full flex items-center justify-center bg-slate-950 overflow-hidden select-none">
-        <div className="absolute inset-0 opacity-20 pointer-events-none">
-          <div className="absolute inset-0" style={{ backgroundImage: 'radial-gradient(circle, #4f46e5 1px, transparent 1px)', backgroundSize: '30px 30px' }}></div>
-        </div>
+  const clearScene = () => {
+    if (!events.length) return;
+    if (!window.confirm(`清空「${subScene || SCENE_LABELS[scene]}」的所有紀錄？`)) return;
+    setHistory(p => {
+      const next = { ...p };
+      delete next[historyKey];
+      return next;
+    });
+  };
 
-        {/* SVG 連接線層 */}
-        <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
-          <defs>
-            <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="25" refY="3.5" orientation="auto">
-              <polygon points="0 0, 10 3.5, 0 7" fill="#6366f1" />
-            </marker>
-          </defs>
-          {relationships.map((rel, i) => {
-            const start = nodePositions[rel.from];
-            const end = nodePositions[rel.to];
-            if (!start || !end) return null;
-            
-            // 將相對座標轉換為畫布中心座標
-            const centerX = (containerRef.current?.clientWidth || 0) / 2;
-            const centerY = (containerRef.current?.clientHeight || 0) / 2;
+  const toggleDm = (name: string) => {
+    setDmPair(p => p.includes(name) ? (p.length > 1 ? p.filter(n => n !== name) : p) : p.length < 2 ? [...p, name] : [p[1], name]);
+  };
 
-            return (
-              <motion.line 
-                key={`${rel.from}-${rel.to}-${i}`} 
-                x1={centerX + start.x} y1={centerY + start.y} 
-                x2={centerX + end.x} y2={centerY + end.y} 
-                stroke="#6366f1" 
-                strokeWidth={Math.max(1, rel.level / 20)}
-                strokeOpacity={0.4}
-                className="relationship-line"
-                markerEnd="url(#arrowhead)"
-              />
-            );
-          })}
-        </svg>
+  // ===== 關係圖拖曳 =====
+  const onNodeDown = (name: string) => (e: React.PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { name, sx: e.clientX, sy: e.clientY, ox: nodes[name].x, oy: nodes[name].y };
+  };
+  const onNodeMove = (name: string) => (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d || d.name !== name) return;
+    const lim = MAP_SIZE / 2 - 30;
+    const clamp = (v: number) => Math.max(-lim, Math.min(lim, v));
+    setNodes(p => ({ ...p, [name]: { x: clamp(d.ox + e.clientX - d.sx), y: clamp(d.oy + e.clientY - d.sy) } }));
+  };
+  const onNodeUp = () => { dragRef.current = null; };
 
-        {/* 成員節點 */}
-        <div className="relative w-full h-full">
-          {Object.keys(PERSONA_DATA).map((name) => (
-            <motion.div 
-              key={name}
-              drag
-              dragMomentum={false}
-              onDrag={(_, info) => {
-                setNodePositions(prev => ({
-                  ...prev,
-                  [name]: { 
-                    x: prev[name].x + info.delta.x, 
-                    y: prev[name].y + info.delta.y 
-                  }
-                }));
-              }}
-              initial={{ x: nodePositions[name].x, y: nodePositions[name].y }}
-              animate={{ x: nodePositions[name].x, y: nodePositions[name].y }}
-              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-3 cursor-grab active:cursor-grabbing z-20 group"
-            >
-              <div className="relative">
-                <div className="w-16 h-16 sm:w-24 sm:h-24 rounded-full bg-indigo-600/20 border-2 border-indigo-500/50 backdrop-blur-md flex items-center justify-center text-white font-black text-xl sm:text-3xl shadow-[0_0_30px_rgba(79,70,229,0.2)] group-hover:scale-110 transition-transform overflow-hidden">
-                   {name[0]}
-                </div>
-                <div className="absolute -bottom-2 -right-2 w-6 h-6 bg-indigo-600 rounded-full flex items-center justify-center border-2 border-slate-900 shadow-lg">
-                  <Link2 size={12} className="text-white" />
-                </div>
-              </div>
-              <div className="bg-slate-900/90 border border-indigo-500/30 px-3 py-1 rounded-full text-[11px] text-indigo-100 font-black shadow-xl backdrop-blur-sm whitespace-nowrap">
-                {name}
-              </div>
-            </motion.div>
-          ))}
-        </div>
+  const saveRel = () => {
+    if (!relEdit) return;
+    const { index, draft } = relEdit;
+    if (draft.from === draft.to) { setToast({ text: '兩端不能是同一個人' }); return; }
+    setRelationships(p => index < 0 ? [...p, draft] : p.map((r, i) => (i === index ? draft : r)));
+    setRelEdit(null);
+  };
+  const deleteRel = () => {
+    if (!relEdit || relEdit.index < 0) return;
+    setRelationships(p => p.filter((_, i) => i !== relEdit.index));
+    setRelEdit(null);
+  };
 
-        {/* 關係詳情浮窗 */}
-        <div className="absolute top-24 left-6 max-w-[200px] pointer-events-none hidden sm:block">
-          <div className="glass p-4 rounded-2xl border border-indigo-500/20">
-            <h4 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">現有連結</h4>
-            <div className="space-y-2">
-              {relationships.slice(0, 5).map((rel, i) => (
-                <div key={i} className="text-[10px] flex flex-col">
-                  <span className="font-bold text-white opacity-80">{rel.from} ↔ {rel.to}</span>
-                  <span className="text-indigo-400 font-mono">{rel.type} ({rel.level}%)</span>
+  // ===== 事件渲染 =====
+  const renderEvent = (ev: SimulationEvent, prev?: SimulationEvent) => {
+    const c = ev.content || {};
+
+    if (ev.eventType === 'scene_change' || ev.eventType === 'system_note') {
+      return ev.eventType === 'scene_change'
+        ? <div className="loc"><Clapperboard size={13} />{c.text}</div>
+        : <div className="note">{c.text || c.action}</div>;
+    }
+
+    if (ev.eventType === 'forum_post') {
+      return (
+        <div className="card">
+          <div className="post-h">
+            <span className="pill v">{c.board || subScene}</span>
+            <span className="post-meta">{c.speaker || '匿名'} · {ev.ts}</span>
+          </div>
+          <h3 className="post-title">{c.title}</h3>
+          <div className="card-t">{c.text}</div>
+          {!!c.replies?.length && (
+            <div className="replies">
+              {c.replies.map((r, i) => (
+                <div className="reply" key={r.id || i}>
+                  <div className="reply-h">
+                    {r.author}
+                    <span className={`tag ${r.type}`}>{REPLY_LABEL[r.type] || r.type}</span>
+                  </div>
+                  <p>{r.text}</p>
                 </div>
               ))}
             </div>
-          </div>
+          )}
+          <button className="link-btn" onClick={() => setCommand(`我在這篇底下回覆：「${c.title}」`)}>
+            <Plus size={14} /> 我也要回覆
+          </button>
         </div>
-      </div>
-    );
-  };
-
-  const renderEvent = (ev: SimulationEvent) => {
-    const isStage = activeScene === 'stage';
-    const isForum = activeScene === 'forum';
-    const isVariety = activeScene === 'variety';
-    const isChat = activeScene === 'group_chat' || activeScene === 'dm';
-
-    if (isForum && ev.eventType === 'forum_post') {
-      return (
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white dark:bg-gray-800 p-5 rounded-2xl border shadow-md space-y-4">
-          <div className="flex items-center justify-between">
-            <span className="bg-indigo-600 text-white px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-widest">{ev.content.board || '一般討論'}</span>
-            <span className="text-[9px] font-mono text-gray-400">{ev.ts}</span>
-          </div>
-          <h3 className="font-black text-base text-slate-800 dark:text-white leading-tight">{ev.content.title}</h3>
-          <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">{ev.content.text}</p>
-          <div className="pt-4 border-t border-slate-100 dark:border-slate-700 space-y-3">
-            {ev.content.replies?.map((reply, rid) => (
-              <div key={reply.id || rid} className="text-[10px] flex flex-col gap-1 bg-slate-50 dark:bg-slate-900/50 p-2 rounded-lg">
-                <div className="flex justify-between opacity-60">
-                  <span className="font-black text-indigo-500">{reply.author}</span>
-                  <span className="text-[8px] uppercase tracking-tighter">{reply.type}</span>
-                </div>
-                <span className="text-slate-700 dark:text-slate-200">{reply.text}</span>
-              </div>
-            ))}
-          </div>
-          <button onClick={() => setDirectorCommand(`回應論壇貼文: ${ev.content.title}`)} className="text-[10px] font-black text-indigo-500 hover:underline">我也要回覆...</button>
-        </motion.div>
       );
     }
 
+    if (isChat && c.text) {
+      const cont = prev?.content?.speaker === c.speaker && prev?.eventType === 'message';
+      return (
+        <div className={`msg ${cont ? 'cont' : ''}`}>
+          <Avatar name={c.speaker} />
+          <div className="msg-b">
+            <div className="msg-n">{c.speaker}<time>{ev.ts}</time></div>
+            <div className="bubble">{c.text}</div>
+          </div>
+        </div>
+      );
+    }
+
+    const isPerformance = c.stage_phase === '舞台表演';
     return (
-      <div className={`group flex flex-col ${isStage ? 'border-l-4 border-indigo-500 pl-6 py-4 my-2' : ''}`}>
-        {ev.content.speaker && (
-          <div className="flex items-center gap-2 mb-1.5">
-            <motion.div animate={CHARACTER_ANIMATIONS[ev.content.speaker] || {}} className="w-2 h-2 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.6)]" />
-            <span className="text-[11px] font-black text-indigo-500 uppercase tracking-widest">{ev.content.speaker}</span>
-            {ev.content.stage_phase && <span className="text-[9px] bg-zinc-800 text-zinc-400 px-2 rounded font-bold">{ev.content.stage_phase}</span>}
+      <div className="card">
+        {(c.speaker || c.stage_phase) && (
+          <div className="card-h">
+            {c.speaker && <Avatar name={c.speaker} />}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {c.speaker && <b>{c.speaker}</b>}
+              {ev.ts && <small> · {ev.ts}</small>}
+            </div>
+            {c.stage_phase && <span className={`pill ${isPerformance ? 'g' : 'v'}`}>{c.stage_phase}</span>}
+            {c.variety_persona && <span className="pill y">{c.variety_persona}</span>}
           </div>
         )}
-        
-        <div className={`p-4 rounded-2xl border shadow-sm text-xs leading-relaxed transition-all ${isStage ? 'bg-zinc-900/80 text-zinc-100 border-zinc-800' : 'bg-white dark:bg-gray-800'}`}>
-          {ev.content.text}
-          {ev.content.detail && (
-            <div className={`mt-3 p-2 rounded-lg text-[10px] font-bold font-mono ${isVariety ? 'bg-emerald-500/10 text-emerald-500 italic' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'}`}>
-              {ev.content.detail}
+        {c.text && <div className="card-t">{c.text}</div>}
+        {c.action && <div className="act">{c.action}</div>}
+        {c.detail && <div className="caption">{c.detail}</div>}
+        {isPerformance && (c.outfit || c.camera || c.lighting || c.choreography) && (
+          <>
+            <div className="stage-grid">
+              {c.outfit && <div><span>STYLING</span>{c.outfit}</div>}
+              {c.lighting && <div><span>LIGHTING</span>{c.lighting}</div>}
+              {c.camera && <div className="full"><span>CAMERA</span>{c.camera}</div>}
+              {c.choreography && <div className="full"><span>CHOREO</span>{c.choreography}</div>}
             </div>
-          )}
-          {isStage && ev.content.stage_phase === '舞台表演' && (
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4 border-t border-zinc-800">
-               {ev.content.outfit && <div className="text-[10px]"><span className="text-indigo-400 font-black block uppercase mb-1">Styling</span> {ev.content.outfit}</div>}
-               {ev.content.camera && <div className="text-[10px]"><span className="text-indigo-400 font-black block uppercase mb-1">Direction</span> {ev.content.camera}</div>}
-               <button 
-                  onClick={() => runSimulation(`REPLAY STAGE MOMENT: ${ev.content.text}`)}
-                  className="mt-2 flex items-center gap-2 text-indigo-400 hover:text-white transition-colors text-[9px] font-black"
-                >
-                  <RotateCcw size={12} /> REPLAY PERFORMANCE
-               </button>
-            </div>
-          )}
-        </div>
-
-        {ev.content.action && !isChat && (
-          <p className="mt-1.5 text-[10px] text-gray-500 italic px-2 font-medium opacity-80">* {ev.content.action}</p>
+            <button className="link-btn" onClick={() => run(`重播這段舞台的高光時刻，換一個機位：${(c.text || '').slice(0, 60)}`)}>
+              <Play size={14} /> 換機位重看
+            </button>
+          </>
         )}
       </div>
     );
   };
 
+  const placeholder =
+    scene === 'forum' ? '用匿名粉絲身分發文或丟話題…'
+      : isChat ? '丟一個話題或事件進聊天室…'
+        : '下達神視干涉指令…';
+
+  const tabDef = TABS.find(t => t.id === tab)!;
+
+  // ===== 畫面 =====
   return (
-    <div className={`flex h-full w-full ${SCENE_BG[activeScene]} overflow-hidden`}>
-      <AnimatePresence>
-        {isSidebarOpen && (
-          <motion.aside 
-            initial={{ x: -260 }} animate={{ x: 0 }} exit={{ x: -260 }}
-            className="fixed inset-y-0 left-0 z-[60] w-64 glass border-r shadow-2xl lg:relative lg:translate-x-0"
-          >
-            <div className="p-6 h-full flex flex-col">
-              <div className="flex items-center justify-between mb-10">
-                <h1 className="text-xl font-black text-indigo-600 dark:text-indigo-400 flex items-center gap-2 tracking-tighter"><Ghost size={24} /> BLUR GOD VIEW</h1>
-                <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-1"><X /></button>
-              </div>
-              <nav className="flex-1 space-y-1.5 overflow-y-auto no-scrollbar">
-                {Object.entries(SCENE_LABELS).map(([id, label]) => (
-                  <motion.button 
-                    whileHover={{ x: 5 }}
-                    key={id} 
-                    onClick={() => { setActiveScene(id as SceneType); setSubScene(''); setIsSidebarOpen(false); }} 
-                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[11px] font-black transition-all ${activeScene === id ? 'bg-indigo-600 text-white shadow-[0_10px_20px_rgba(79,70,229,0.3)]' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-                  >
-                    {label}
-                  </motion.button>
-                ))}
-              </nav>
-              <div className="mt-4 pt-6 border-t flex flex-col gap-2">
-                <button onClick={() => setDarkMode(!darkMode)} className="flex items-center justify-between p-3 bg-slate-100 dark:bg-slate-800 rounded-2xl text-[10px] font-black uppercase tracking-widest">
-                   {darkMode ? <Sun size={14} className="text-amber-400" /> : <Moon size={14} className="text-indigo-600" />}
-                   Mode: {darkMode ? 'Dark' : 'Light'}
-                </button>
-              </div>
-            </div>
-          </motion.aside>
-        )}
-      </AnimatePresence>
-
-      <main className="flex-1 flex flex-col relative overflow-hidden">
-        <header className="glass px-6 py-4 flex flex-col border-b z-40 bg-white/70 dark:bg-slate-900/70">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-4">
-              {!isSidebarOpen && <button onClick={() => setIsSidebarOpen(true)} className="p-2 rounded-xl border bg-white dark:bg-slate-800 lg:hidden shadow-sm"><Menu size={20} /></button>}
-              <div>
-                <h2 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">{SCENE_LABELS[activeScene]}</h2>
-                {subScene && <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm font-black text-indigo-600 block">{subScene}</motion.span>}
-              </div>
-            </div>
-            <div className="flex gap-2">
-              {activeScene === 'relationship_map' && (
-                <button 
-                  onClick={() => setIsEditingRel(!isEditingRel)}
-                  className={`p-2.5 rounded-xl border transition-all flex items-center gap-2 text-[10px] font-black ${isEditingRel ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800'}`}
-                >
-                  <Edit3 size={16} /> <span className="hidden sm:inline">EDIT MAP</span>
-                </button>
-              )}
-              <button 
-                onClick={() => setFilterType(filterType ? null : 'message')}
-                className={`p-2.5 rounded-xl border transition-all ${filterType ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800'}`}
-              >
-                <Filter size={16} />
-              </button>
-
-              <button
-                onClick={clearCurrentHistory}
-                className="p-2.5 border rounded-xl bg-white dark:bg-slate-800 text-indigo-600 hover:rotate-180 transition-transform duration-500 shadow-sm"
-                title="清空本頁紀錄（刷新）"
-                aria-label="清空本頁紀錄（刷新）"
-              >
-                <RefreshCw size={16} />
-              </button>
-
-              <button
-                onClick={() => window.openSelectKey?.()}
-                className="p-2.5 rounded-xl border transition-all bg-white dark:bg-slate-800 text-indigo-600 shadow-sm"
-                title="設定 API Key"
-                aria-label="設定 API Key"
-              >
-                <Key size={16} />
-              </button>
-            </div>
+    <div className={`app ${scene === 'stage' ? 'dark-stage' : ''}`}>
+      {/* 頂部 */}
+      <header className="top">
+        <div className="top-row">
+          <div className="brand">
+            <b>BLUR</b>
+            <small>{SCENE_LABELS[scene]}{scene === 'dm' ? ` · ${dmPair.join(' × ')}` : subScene ? ` · ${subScene}` : ''}</small>
           </div>
-
-          <AnimatePresence mode="wait">
-            {(activeScene === 'stage' || activeScene === 'variety' || activeScene === 'forum') && (
-              <motion.div 
-                initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-                className="flex gap-2 overflow-x-auto no-scrollbar pb-1"
-              >
-                {(activeScene === 'stage' ? MUSIC_SHOWS : activeScene === 'variety' ? VARIETY_SHOWS : FORUM_BOARDS).map(show => (
-                  <button 
-                    key={show} 
-                    onClick={() => setSubScene(show)} 
-                    className={`px-4 py-1.5 rounded-full text-[10px] font-black whitespace-nowrap transition-all border shadow-sm ${subScene === show ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-800 border-slate-200'}`}
-                  >
-                    {show}
-                  </button>
-                ))}
-              </motion.div>
+          <div className="top-btns">
+            {tab !== 'map' && (
+              <button className="ibtn glass" onClick={clearScene} aria-label="清空本頁紀錄" title="清空本頁紀錄">
+                <RotateCcw size={18} />
+              </button>
             )}
-          </AnimatePresence>
-        </header>
-
-        <div className="flex-1 relative overflow-hidden">
-          {activeScene === 'relationship_map' ? (
-            <div className="w-full h-full relative">
-              <RelationshipMap />
-              <AnimatePresence>
-                {isEditingRel && (
-                  <motion.div 
-                    initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
-                    className="absolute inset-y-0 right-0 w-full sm:w-80 glass border-l p-6 overflow-y-auto z-[55] bg-white/95 dark:bg-slate-900/95 shadow-2xl pb-40"
-                  >
-                    <div className="flex items-center justify-between mb-8">
-                      <h3 className="text-sm font-black flex items-center gap-2"><SettingsIcon size={18} /> 關係引擎參數</h3>
-                      <button onClick={() => setIsEditingRel(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"><X size={20} /></button>
-                    </div>
-                    <div className="space-y-6">
-                      {relationships.map((rel, i) => (
-                        <div key={i} className="space-y-4 p-4 border border-slate-200 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-800/50 shadow-sm">
-                          <div className="flex justify-between items-center text-[11px] font-black text-indigo-500 uppercase">
-                            <span>{rel.from} ↔ {rel.to}</span>
-                            <button onClick={() => setRelationships(p => p.filter((_, idx) => idx !== i))} className="p-1 text-red-400 hover:bg-red-50 rounded"><Trash2 size={14} /></button>
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-[9px] font-black opacity-40 uppercase">關係類型</label>
-                            <input 
-                              className="w-full text-xs bg-slate-50 dark:bg-slate-950 p-2 rounded-lg outline-none border border-slate-100 dark:border-slate-800" 
-                              value={rel.type} 
-                              onChange={(e) => updateRelationship(i, 'type', e.target.value)} 
-                            />
-                          </div>
-                          <div className="space-y-1">
-                             <div className="flex justify-between items-center">
-                               <label className="text-[9px] font-black opacity-40 uppercase">親密度</label>
-                               <span className="text-[10px] font-mono text-indigo-500 font-black">{rel.level}%</span>
-                             </div>
-                            <input 
-                              type="range" className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-600" value={rel.level} 
-                              onChange={(e) => updateRelationship(i, 'level', parseInt(e.target.value))} 
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-[9px] font-black opacity-40 uppercase">細部註記</label>
-                            <textarea 
-                              className="w-full text-[10px] bg-slate-50 dark:bg-slate-950 p-2 rounded-lg outline-none border border-slate-100 dark:border-slate-800 min-h-[60px]" 
-                              value={rel.note} 
-                              onChange={(e) => updateRelationship(i, 'note', e.target.value)}
-                            />
-                          </div>
-                        </div>
-                      ))}
-                      <button 
-                        onClick={() => setRelationships([...relationships, { from: 'Chloe', to: 'Nanae', type: '新關係', level: 50, note: '描述此關係...' }])}
-                        className="w-full py-4 border-2 border-dashed border-indigo-200 dark:border-indigo-900 rounded-2xl text-[10px] font-black text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950 transition-all uppercase tracking-widest"
-                      >
-                        + ADD NEW CONNECTION
-                      </button>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          ) : (
-            <div ref={feedRef} className="h-full overflow-y-auto px-6 py-8 no-scrollbar scroll-smooth">
-              <div className="max-w-3xl mx-auto space-y-8 pb-48">
-                {currentEvents.length === 0 && (
-                  <div className="flex flex-col items-center justify-center py-40 opacity-20 space-y-4">
-                    <Sparkles size={64} className="animate-pulse" />
-                    <p className="text-sm font-black tracking-widest uppercase">Initializing Observation Signal...</p>
-                  </div>
-                )}
-                <AnimatePresence mode="popLayout">
-                  {currentEvents.map((ev, idx) => (
-                    <motion.div 
-                      key={ev.eventId || idx} 
-                      layout
-                      initial={{ opacity: 0, y: 20, scale: 0.98 }} 
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      transition={{ type: 'spring', damping: 20 }}
-                    >
-                      {renderEvent(ev)}
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-                {isGenerating && (
-                  <div className="flex gap-2 items-center opacity-40 px-4">
-                    <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="w-2 h-2 rounded-full bg-indigo-500" />
-                    <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="w-2 h-2 rounded-full bg-indigo-500" />
-                    <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="w-2 h-2 rounded-full bg-indigo-500" />
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+            <button className={`ibtn glass ${hasKey ? '' : 'dot'}`} onClick={openSettings} aria-label="設定" title="設定">
+              <SettingsIcon size={18} />
+            </button>
+          </div>
         </div>
 
-        {activeScene !== 'relationship_map' && (
-          <footer className="absolute bottom-6 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-3xl z-50">
-            <div className="glass p-3 border rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.2)] bg-white/80 dark:bg-slate-900/80 flex flex-col gap-2">
-              {activeScene === 'dm' && (
-                <div className="px-4 py-2 border-b border-slate-200 dark:border-slate-700 flex gap-2 overflow-x-auto no-scrollbar items-center">
-                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-tighter whitespace-nowrap"><UserPlus size={12} className="inline mr-1" /> TARGET:</div>
-                  {Object.keys(PERSONA_DATA).map(name => (
-                    <button 
-                      key={name} 
-                      onClick={() => setSelectedMembers(p => p.includes(name) ? p.filter(n => n !== name) : p.length < 2 ? [...p, name] : [p[1], name])} 
-                      className={`px-3 py-1 rounded-xl text-[10px] font-black border transition-all whitespace-nowrap ${selectedMembers.includes(name) ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white/50 dark:bg-slate-800 border-slate-200 dark:border-slate-700'}`}
-                    >
-                      {name}
-                    </button>
-                  ))}
+        {tabDef.scenes.length > 1 && (
+          <div className="chips">
+            {tabDef.scenes.map(s => (
+              <button key={s} className={`chip ${scene === s ? 'on' : ''}`} onClick={() => setTabScene(p => ({ ...p, [tab]: s }))}>
+                {SCENE_LABELS[s]}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {SUB_OPTIONS[scene] && (
+          <div className="chips">
+            {SUB_OPTIONS[scene]!.map(o => (
+              <button key={o} className={`chip sm ghost ${subScene === o ? 'on' : ''}`} onClick={() => setSubScenes(p => ({ ...p, [scene]: o }))}>
+                {o}
+              </button>
+            ))}
+          </div>
+        )}
+      </header>
+
+      {/* 內容 */}
+      {tab === 'map' ? (
+        <div className="map-wrap" key="map">
+          <div className="map">
+            <svg width={MAP_SIZE} height={MAP_SIZE}>
+              <defs>
+                <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stopColor="#7FE3D6" />
+                  <stop offset=".55" stopColor="#8E72F0" />
+                  <stop offset="1" stopColor="#E58AC0" />
+                </linearGradient>
+              </defs>
+              {relationships.map((r, i) => {
+                const a = nodes[r.from], b = nodes[r.to];
+                if (!a || !b) return null;
+                const cx = MAP_SIZE / 2;
+                const x1 = cx + a.x, y1 = cx + a.y, x2 = cx + b.x, y2 = cx + b.y;
+                // 微彎曲線，避免雙向關係重疊
+                const mx = (x1 + x2) / 2 - (y2 - y1) * 0.15, my = (y1 + y2) / 2 + (x2 - x1) * 0.15;
+                return (
+                  <path
+                    key={i} d={`M${x1},${y1} Q${mx},${my} ${x2},${y2}`} fill="none"
+                    stroke="url(#lg)" strokeLinecap="round" strokeOpacity={0.35 + r.level / 200}
+                    strokeWidth={1.5 + r.level / 25}
+                  />
+                );
+              })}
+            </svg>
+            {MEMBERS.map(n => (
+              <div
+                key={n} className="node"
+                style={{ transform: `translate(${MAP_SIZE / 2 + nodes[n].x}px, ${MAP_SIZE / 2 + nodes[n].y}px) translate(-50%, -28px)` }}
+                onPointerDown={onNodeDown(n)} onPointerMove={onNodeMove(n)} onPointerUp={onNodeUp} onPointerCancel={onNodeUp}
+              >
+                <Avatar name={n} size="lg" />
+                <span>{n}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="rel-list">
+            {relationships.map((r, i) => (
+              <button key={i} className="rel" onClick={() => setRelEdit({ index: i, draft: { ...r } })}>
+                <div className="rel-pair"><Avatar name={r.from} size="xs" /><Avatar name={r.to} size="xs" /></div>
+                <div className="rel-b">
+                  <b>{r.from} → {r.to}・{r.type}</b>
+                  <small>{r.note}</small>
                 </div>
-              )}
-              
-              <div className="flex gap-3 items-center">
-                <input 
-                  type="text" 
-                  value={directorCommand} 
-                  onChange={e => setDirectorCommand(e.target.value)} 
-                  onKeyDown={e => e.key === 'Enter' && runSimulation()} 
-                  placeholder={activeScene === 'forum' ? "以匿名粉絲身份發表觀點..." : "下達神視干涉指令..."} 
-                  className="flex-1 bg-transparent border-none px-4 py-3 text-sm outline-none font-medium placeholder:text-slate-400" 
-                />
-                <motion.button 
-                  whileTap={{ scale: 0.9 }}
-                  onClick={() => runSimulation()} 
-                  disabled={isGenerating} 
-                  className="bg-indigo-600 text-white p-4 rounded-[1.5rem] shadow-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                <div className="meter"><i style={{ width: `${r.level}%` }} /></div>
+                <span className="lvl">{r.level}%</span>
+              </button>
+            ))}
+            <button
+              className="btn soft"
+              onClick={() => setRelEdit({ index: -1, draft: { from: MEMBERS[0], to: MEMBERS[1], type: '', level: 60, note: '' } })}
+            >
+              <Plus size={18} /> 新增關係
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="feed" key="feed" ref={feedRef}>
+          <div className="feed-in">
+            {events.length === 0 && !busy && (
+              <div className="empty">
+                <div className="empty-ic"><Sparkles size={32} /></div>
+                <b>{subScene || SCENE_LABELS[scene]}還很安靜</b>
+                <p>按下開始觀測，或在下面輸入你想讓她們發生的事。</p>
+                <button className="btn" onClick={() => run('')}><Eye size={18} /> 開始觀測</button>
+              </div>
+            )}
+            <AnimatePresence initial={false}>
+              {events.map((ev, i) => (
+                <motion.div
+                  key={ev.eventId || i}
+                  initial={{ opacity: 0, y: 14, scale: .98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ type: 'spring', damping: 24, stiffness: 260, delay: Math.min(i % 12, 8) * 0.03 }}
+                  style={{ display: 'flex', flexDirection: 'column' }}
                 >
-                  {isGenerating ? <Loader2 className="animate-spin" size={20} /> : <Zap size={20} />}
-                </motion.button>
+                  {renderEvent(ev, events[i - 1])}
+                </motion.div>
+              ))}
+            </AnimatePresence>
+            {busy && (
+              <div className="typing">
+                <Avatar />
+                <div className="bubble"><i /><i /><i /></div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 輸入列 */}
+      {tab !== 'map' && (
+        <div className="composer">
+          {scene === 'dm' && (
+            <div className="dm-pick">
+              {MEMBERS.map(n => (
+                <button key={n} className={dmPair.includes(n) ? 'on' : ''} onClick={() => toggleDm(n)}>
+                  <Avatar name={n} size="xs" />{n}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="c-row glass">
+            <input
+              value={command}
+              onChange={e => setCommand(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) run(); }}
+              placeholder={placeholder}
+              enterKeyHint="send"
+            />
+            <button className="send" onClick={() => run()} disabled={busy} aria-label="生成">
+              {busy ? <Loader2 size={20} className="spin" /> : <ArrowUp size={20} strokeWidth={2.6} />}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 液態玻璃導覽列 */}
+      <nav className="nav">
+        {TABS.map(t => {
+          const Icon = t.icon;
+          return (
+            <button key={t.id} className={tab === t.id ? 'on' : ''} onClick={() => setTab(t.id)}>
+              {tab === t.id && <motion.div layoutId="lens" className="lens" transition={{ type: 'spring', damping: 22, stiffness: 300 }} />}
+              <Icon size={21} strokeWidth={tab === t.id ? 2.4 : 2} />
+              <span>{t.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* 設定 */}
+      <Sheet open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+        <h3>設定 <button className="ibtn" onClick={() => setSettingsOpen(false)} aria-label="關閉"><X size={20} /></button></h3>
+        <p className="sub">Key 只存在這支手機的瀏覽器裡，只會直接送給 Claude，不經過其他地方。</p>
+
+        <div className="field">
+          <label>Claude API Key</label>
+          <div className="inp">
+            <input
+              type={showKey ? 'text' : 'password'} value={keyDraft} onChange={e => setKeyDraft(e.target.value)}
+              placeholder="sk-ant-…" autoComplete="off" spellCheck={false}
+            />
+            <button className="ibtn" onClick={() => setShowKey(v => !v)} aria-label={showKey ? '隱藏' : '顯示'}>
+              {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          <span className="hint">
+            到 <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">Claude Console</a> 建立 Key。API 另外計費，跟 Claude 訂閱方案是分開的。
+          </span>
+        </div>
+
+        <div className="field">
+          <label>模型</label>
+          <div className="models">
+            {MODELS.map(m => (
+              <button key={m.id} className={`model ${modelDraft === m.id ? 'on' : ''}`} onClick={() => setModelDraft(m.id)}>
+                <div><b>{m.label}</b><small>{m.note}</small></div>
+                <div className="rad" />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <button className="btn" style={{ width: '100%' }} onClick={saveSettings}>儲存</button>
+      </Sheet>
+
+      {/* 編輯關係 */}
+      <Sheet open={!!relEdit} onClose={() => setRelEdit(null)}>
+        {relEdit && (
+          <>
+            <h3>{relEdit.index < 0 ? '新增關係' : '編輯關係'} <button className="ibtn" onClick={() => setRelEdit(null)} aria-label="關閉"><X size={20} /></button></h3>
+            <p className="sub">改完之後，下一輪生成就會照新的關係演。</p>
+            <div className="row">
+              {(['from', 'to'] as const).map(k => (
+                <div className="field" key={k}>
+                  <label>{k === 'from' ? '誰' : '對誰'}</label>
+                  <div className="inp">
+                    <select value={relEdit.draft[k]} onChange={e => { const v = e.target.value; setRelEdit(r => r && ({ ...r, draft: { ...r.draft, [k]: v } })); }}>
+                      {MEMBERS.map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="field">
+              <label>關係類型</label>
+              <div className="inp">
+                <input value={relEdit.draft.type} placeholder="例如：靈魂伴侶" onChange={e => { const v = e.target.value; setRelEdit(r => r && ({ ...r, draft: { ...r.draft, type: v } })); }} />
               </div>
             </div>
-          </footer>
+            <div className="field">
+              <label>親密度 {relEdit.draft.level}%</label>
+              <input type="range" min={0} max={100} value={relEdit.draft.level}
+                onChange={e => { const v = Number(e.target.value); setRelEdit(r => r && ({ ...r, draft: { ...r.draft, level: v } })); }} />
+            </div>
+            <div className="field">
+              <label>細節</label>
+              <textarea className="ta" value={relEdit.draft.note} placeholder="這段關係的小細節…"
+                onChange={e => { const v = e.target.value; setRelEdit(r => r && ({ ...r, draft: { ...r.draft, note: v } })); }} />
+            </div>
+            <div className="row">
+              {relEdit.index >= 0 && <button className="btn danger" onClick={deleteRel}><Trash2 size={17} /> 刪除</button>}
+              <button className="btn" onClick={saveRel}>儲存</button>
+            </div>
+          </>
         )}
-      </main>
+      </Sheet>
+
+      {/* Toast */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div className="toast" initial={{ opacity: 0, y: -16, x: '-50%' }} animate={{ opacity: 1, y: 0, x: '-50%' }} exit={{ opacity: 0, y: -16, x: '-50%' }}>
+            <span>{toast.text}</span>
+            {toast.action && <button onClick={() => { toast.action!.run(); setToast(null); }}>{toast.action.label}</button>}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

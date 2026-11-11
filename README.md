@@ -15,6 +15,6 @@ View your app in AI Studio: https://ai.studio/apps/drive/14M8xORtFQ0-HPw3B3OeNIK
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. 打開網頁後，到右上角設定貼上 Claude API Key（存在瀏覽器裡）
 3. Run the app:
    `npm run dev`

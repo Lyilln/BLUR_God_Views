@@ -21,7 +21,9 @@ export const FORUM_BOARDS = [
   '回歸討論', '舞台截圖/彩蛋分析', '成員關係學/互動糖點', '謠言澄清', '路人感想', '搞笑meme/梗圖'
 ];
 
-export const INITIAL_RELATIONSHIPS: any[] = [
+import { RelationshipLink } from './types';
+
+export const INITIAL_RELATIONSHIPS: RelationshipLink[] = [
   { from: 'Chloe', to: 'RAHI', type: '靈魂伴侶', level: 95, note: '共同搗蛋小隊' },
   { from: 'Yeongri', to: 'Sera', type: '互補搭檔', level: 90, note: '隊內的雙親' },
   { from: 'Nanae', to: 'Yeongri', type: '敬畏', level: 85, note: '隊長的小跟班' },
@@ -32,4 +34,13 @@ export const INITIAL_RELATIONSHIPS: any[] = [
 export const WORLD_VIEW = {
   concept: '夢幻、空靈、優雅、黑暗、反叛',
   music_style: '「空靈的叛亂」：古典架構揉合工業噪音。'
+};
+
+// 成員代表色（頭像漸層）
+export const MEMBER_COLORS: Record<string, [string, string]> = {
+  Chloe: ['#7FE3D6', '#5B8DEF'],
+  Nanae: ['#C4B5FD', '#8E72F0'],
+  Yeongri: ['#9AA8C7', '#3B3F6B'],
+  RAHI: ['#FFC48A', '#F2789F'],
+  Sera: ['#F9C6DD', '#E58AC0'],
 };
