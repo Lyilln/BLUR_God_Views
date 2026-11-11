@@ -136,6 +136,10 @@ export default function App() {
       const msg = String(e?.message || e || '');
       if (msg.includes('NO_API_KEY')) {
         alert('你還沒設定 Gemini API Key～先按右上角 🔑 放一下鑰匙再生成 ✅');
+      } else if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+        alert('API 額度用完了（429），等一下再試，或換一把 Key。');
+      } else {
+        alert('生成失敗：' + msg.slice(0, 200));
       }
     } finally { 
       setIsGenerating(false); 

@@ -10,6 +10,10 @@ declare global {
 
 const KEY_NAME = "GEMINI_API_KEY";
 
+// 依序嘗試：第一個失敗（模型下架、沒額度等）就自動換下一個
+// gemini-3-pro-preview 已於 2026-03-09 停用，不要再用
+const MODELS = ["gemini-3.1-pro-preview", "gemini-3.6-flash", "gemini-3.1-flash-lite"];
+
 // === Key storage ===
 function getStoredKey() {
   if (typeof window === "undefined") return "";
@@ -225,9 +229,14 @@ export async function generateSimulation(
     Language: Traditional Chinese (Taiwan).
   `;
 
+  const isKeyError = (m: string) =>
+    m.includes("API_KEY_INVALID") || m.includes("API key not valid") || m.includes("NO_API_KEY");
+
+  let lastError: any = null;
+  for (const model of MODELS) {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-pro-preview",
+      model,
       contents: command?.trim() ? command : "Generate the next simulation block.",
       config: {
         systemInstruction,
@@ -295,20 +304,17 @@ export async function generateSimulation(
 
     return JSON.parse(response.text || "{}") as SimulationBlock;
   } catch (error: any) {
+    lastError = error;
     const msg = String(error?.message || "");
+    console.warn(`[BLUR] ${model} 失敗：`, msg);
 
-    // key 壞掉/沒設 → 再彈一次
-    if (
-      typeof window !== "undefined" &&
-      window.openSelectKey &&
-      (msg.includes("Requested entity was not found.") ||
-        msg.includes("API key") ||
-        msg.includes("apiKey") ||
-        msg.includes("NO_API_KEY"))
-    ) {
-      await window.openSelectKey();
+    // 只有「金鑰真的有問題」才重新要 key，其他錯誤換下一個模型
+    if (isKeyError(msg)) {
+      if (typeof window !== "undefined" && window.openSelectKey) await window.openSelectKey();
+      throw error;
     }
-
-    throw error;
   }
+  }
+
+  throw lastError || new Error("所有模型都失敗了");
 }
