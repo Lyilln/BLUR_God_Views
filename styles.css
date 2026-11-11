@@ -436,3 +436,9 @@ input[type=range] { width: 100%; accent-color: #8E72F0; }
 .lv-ended { flex: 1; text-align: center; font-size: 13px; font-weight: 700; color: rgba(255,255,255,.75); padding: 14px; }
 .lv-cont { position: absolute; z-index: 4; left: 50%; bottom: calc(var(--safe-bottom) + 84px); transform: translateX(-50%); padding: 10px 20px; border-radius: 999px; font-weight: 800; font-size: 13.5px; color: #fff; background: var(--grad); }
 .nav button { font-size: 10px; }
+.lore-sec { margin: 22px 0 10px; padding-top: 14px; border-top: 1px solid rgba(120,100,170,.14); font-size: 14px; font-weight: 900; color: #6B4FD8; }
+.lore-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 10px; }
+.lore-grid .field { margin-bottom: 12px; min-width: 0; }
+.lore-grid .field.full, .lore-grid .lore-sec { grid-column: 1 / -1; }
+.lore-grid .lore-sec:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+.lore-grid .inp { height: 44px; }

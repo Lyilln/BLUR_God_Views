@@ -6,7 +6,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { SceneType, SimulationEvent, RelationshipLink } from './types';
 import { PERSONA_DATA, INITIAL_RELATIONSHIPS, MUSIC_SHOWS, VARIETY_SHOWS, FORUM_BOARDS, MEMBER_COLORS } from './constants';
-import { generateSimulation, SimError, Lore, LiveSession, normalizeLore, GROUP_FIELDS, MEMBER_FIELDS } from './services/gemini';
+import { generateSimulation, SimError, Lore, LiveSession, normalizeLore, GROUP_FIELDS, memberFields } from './services/gemini';
 import Live from './components/Live';
 import Forum from './components/Forum';
 
@@ -541,21 +541,26 @@ export default function App() {
             <button key={t} className={`chip sm ${loreTab === t ? 'on' : ''}`} onClick={() => setLoreTab(t)}>{t}</button>
           ))}
         </div>
-        {(loreTab === '團體' ? GROUP_FIELDS : MEMBER_FIELDS).map(f => {
+        <div className="lore-grid">
+        {(loreTab === '團體' ? GROUP_FIELDS.map(f => ({ ...f, sec: '', short: false })) : memberFields(loreTab, MEMBERS)).map((f, i, arr) => {
           const val = loreTab === '團體' ? loreDraft.group[f.k] : loreDraft.members[loreTab]?.[f.k];
+          const set = (v: string) => setLoreDraft(d => loreTab === '團體'
+            ? { ...d, group: { ...d.group, [f.k]: v } }
+            : { ...d, members: { ...d.members, [loreTab]: { ...(d.members[loreTab] || {}), [f.k]: v } } });
+          const head = f.sec && f.sec !== arr[i - 1]?.sec;
           return (
-            <div className="field" key={loreTab + f.k}>
-              <label>{f.label}</label>
-              <textarea className="ta" value={val || ''} placeholder={f.ph}
-                onChange={e => {
-                  const v = e.target.value;
-                  setLoreDraft(d => loreTab === '團體'
-                    ? { ...d, group: { ...d.group, [f.k]: v } }
-                    : { ...d, members: { ...d.members, [loreTab]: { ...(d.members[loreTab] || {}), [f.k]: v } } });
-                }} />
-            </div>
+            <React.Fragment key={loreTab + f.k}>
+              {head && <div className="lore-sec">{f.sec}</div>}
+              <div className={`field ${f.short ? '' : 'full'}`}>
+                <label>{f.label}</label>
+                {f.short
+                  ? <div className="inp"><input value={val || ''} placeholder={f.ph} onChange={e => set(e.target.value)} /></div>
+                  : <textarea className="ta" value={val || ''} placeholder={f.ph} onChange={e => set(e.target.value)} />}
+              </div>
+            </React.Fragment>
           );
         })}
+        </div>
         <button className="btn" style={{ width: '100%' }} onClick={() => { setLore(loreDraft); setLoreOpen(false); setToast({ text: '設定集已儲存' }); }}>儲存</button>
       </Sheet>
 

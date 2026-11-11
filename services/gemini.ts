@@ -159,15 +159,42 @@ export const GROUP_FIELDS = [
   { k: "company", label: "公司・工作人員", ph: "經紀公司、經紀人個性、宿舍分房…" },
   { k: "world", label: "世界觀・其他", ph: "其他想讓她們照著演的設定" },
 ];
-export const MEMBER_FIELDS = [
-  { k: "speech", label: "口頭禪・說話範例", ph: "她真的會講的一兩句話" },
-  { k: "habits", label: "習慣・小動作", ph: "緊張時會做什麼、生活習慣…" },
-  { k: "likes", label: "喜歡／討厭", ph: "食物、東西、事情…" },
-  { k: "bonds", label: "私人梗・舊帳", ph: "跟誰之間的梗、吵過什麼架…" },
-  { k: "now", label: "最近在煩惱・想要的", ph: "現在卡在什麼、想得到什麼…" },
-  { k: "secret", label: "秘密（粉絲不知道）", ph: "只有團員或她自己知道的事" },
-  { k: "other", label: "其他", ph: "" },
+type Field = { sec: string; k: string; label: string; ph: string; short?: boolean };
+const MF: Field[] = [
+  { sec: "基本資料", k: "realname", label: "本名", ph: "", short: true },
+  { sec: "基本資料", k: "birthday", label: "生日", ph: "", short: true },
+  { sec: "基本資料", k: "age", label: "年齡", ph: "", short: true },
+  { sec: "基本資料", k: "height", label: "身高・體型", ph: "", short: true },
+  { sec: "基本資料", k: "mbti", label: "MBTI・血型", ph: "", short: true },
+  { sec: "基本資料", k: "origin", label: "出身地・國籍", ph: "", short: true },
+  { sec: "基本資料", k: "position", label: "團內職位", ph: "主唱、主舞、門面…", short: true },
+  { sec: "基本資料", k: "lang", label: "會的語言", ph: "", short: true },
+  { sec: "外在", k: "look", label: "外貌特徵", ph: "髮色、痣、笑起來的樣子…" },
+  { sec: "外在", k: "style", label: "穿搭・私服風格", ph: "" },
+  { sec: "個性", k: "front", label: "鏡頭前的樣子", ph: "" },
+  { sec: "個性", k: "back", label: "私下的樣子", ph: "" },
+  { sec: "個性", k: "temper", label: "生氣・難過・害羞時", ph: "會怎麼反應" },
+  { sec: "說話", k: "speech", label: "口頭禪・說話範例", ph: "她真的會講的一兩句話" },
+  { sec: "說話", k: "call", label: "怎麼稱呼別人", ph: "叫隊長什麼、叫粉絲什麼…" },
+  { sec: "說話", k: "texting", label: "傳訊息的習慣", ph: "愛用的貼圖、標點、已讀不回…" },
+  { sec: "生活", k: "habits", label: "習慣・小動作", ph: "緊張時會做什麼、作息…" },
+  { sec: "生活", k: "likes", label: "喜歡／討厭", ph: "食物、東西、事情…" },
+  { sec: "生活", k: "hobby", label: "興趣・專長", ph: "" },
+  { sec: "過去", k: "trainee", label: "練習生時期・出道前", ph: "" },
+  { sec: "內心", k: "now", label: "最近在煩惱・想要的", ph: "" },
+  { sec: "內心", k: "dream", label: "夢想・目標", ph: "" },
+  { sec: "內心", k: "fear", label: "害怕・在意的事", ph: "" },
+  { sec: "內心", k: "secret", label: "秘密（粉絲不知道）", ph: "只有團員或她自己知道的事" },
+  { sec: "對外", k: "image", label: "粉絲眼中的形象・綜藝人設", ph: "" },
+  { sec: "其他", k: "other", label: "其他", ph: "" },
 ];
+// 團內關係：對每一位其他成員各一格
+export function memberFields(name: string, all: string[]): Field[] {
+  const rel: Field[] = all.filter(n => n !== name).map(n => ({ sec: "團內關係", k: `rel_${n}`, label: `對 ${n}`, ph: "怎麼看她、怎麼相處、私人梗、舊帳…" }));
+  rel.push({ sec: "團內關係", k: "bonds", label: "其他私人梗・舊帳", ph: "" });
+  const i = MF.findIndex(f => f.sec === "過去");
+  return [...MF.slice(0, i + 1), ...rel, ...MF.slice(i + 1)];
+}
 export type Lore = { group: Record<string, string>; members: Record<string, Record<string, string>> };
 
 // 舊版設定集（整段文字）轉成新格式
@@ -185,7 +212,7 @@ function buildSystem(sceneText: string, ctx: Ctx): string {
   const personas = Object.values(PERSONA_DATA)
     .map(p => {
       const mf = ctx.lore?.members?.[p.name] || {};
-      const extra = MEMBER_FIELDS
+      const extra = memberFields(p.name, Object.keys(PERSONA_DATA))
         .filter(f => mf[f.k]?.trim() && !(ctx.publicOnly && f.k === "secret"))
         .map(f => `  ${f.label}：${mf[f.k].trim()}`).join("\n");
       return `- ${p.name}（${p.role}）：${p.traits} 說話：${p.speech} ${p.relationship}${extra ? `\n${extra}` : ""}`;
