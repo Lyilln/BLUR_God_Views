@@ -1,21 +1,8 @@
 import { SimulationBlock, SimulationEvent, SceneType, RelationshipLink } from "../types";
 import { PERSONA_DATA, WORLD_VIEW } from "../constants";
 
-// ===== 模型（全部是免費額度可用的；額度用完會自動換下一個）=====
-export const MODELS = ["gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite"];
-
-// 沿用舊版的儲存名稱，之前貼過的 Gemini Key 會直接生效
-const KEY_STORE = "GEMINI_API_KEY";
-
-const safeGet = (k: string) => {
-  try { return localStorage.getItem(k) || ""; } catch { return ""; }
-};
-const safeSet = (k: string, v: string) => {
-  try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { /* ignore */ }
-};
-
-export const getApiKey = () => safeGet(KEY_STORE).trim();
-export const setApiKey = (v: string) => safeSet(KEY_STORE, v.trim());
+// ===== 後端網址（Supabase Edge Function；Gemini Key 存在後端，網站上看不到）=====
+export const API_URL = "https://hzjhzhxgeuchpyxhsbgj.supabase.co/functions/v1/blur-generate";
 
 // ===== 錯誤 =====
 export type SimErrorCode = "NO_KEY" | "BAD_KEY" | "RATE" | "OVERLOAD" | "NETWORK" | "OTHER";
@@ -29,8 +16,8 @@ export class SimError extends Error {
 }
 
 export const ERROR_TEXT: Record<SimErrorCode, string> = {
-  NO_KEY: "還沒放 Gemini API Key，先到設定貼上",
-  BAD_KEY: "這把 Key 無效，請到設定重新貼上",
+  NO_KEY: "後端還沒設定 Gemini Key",
+  BAD_KEY: "後端的 Gemini Key 無效，請到 Supabase 重新設定",
   RATE: "免費額度暫時用完了，等一分鐘再試；如果是今天的量用完，明天會重置",
   OVERLOAD: "Gemini 現在忙線中，稍後再試",
   NETWORK: "網路連線失敗，檢查一下網路",
@@ -160,9 +147,6 @@ export async function generateSimulation(
   command: string,
   ctx: { subScene?: string; history?: SimulationEvent[]; relationships?: RelationshipLink[]; dmPair?: string[] }
 ): Promise<SimulationBlock> {
-  const apiKey = getApiKey();
-  if (!apiKey) throw new SimError("NO_KEY", ERROR_TEXT.NO_KEY);
-
   const personas = Object.values(PERSONA_DATA)
     .map(p => `- ${p.name}（${p.role}）：${p.traits} 說話：${p.speech} ${p.relationship}`)
     .join("\n");
@@ -194,63 +178,29 @@ ${historyText(ctx.history)}
 
 神視干涉指令：${command.trim() || "（無，請自主推進下一段劇情）"}`;
 
-  let input: any = null;
-  let lastErr: SimError | null = null;
-
-  for (const model of MODELS) {
-    let res: Response;
-    try {
-      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: system }] },
-          contents: [{ role: "user", parts: [{ text: userMsg }] }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: GEMINI_SCHEMA,
-            temperature: 1,
-          },
-        }),
-      });
-    } catch {
-      throw new SimError("NETWORK", ERROR_TEXT.NETWORK);
-    }
-
-    if (!res.ok) {
-      let detail = "";
-      try {
-        const err = await res.json();
-        detail = err?.error?.message || "";
-      } catch { /* ignore */ }
-      console.warn(`[BLUR] ${model} ${res.status}`, detail);
-      if (res.status === 403 || /API_KEY_INVALID|API key not valid/i.test(detail)) {
-        throw new SimError("BAD_KEY", ERROR_TEXT.BAD_KEY);
-      }
-      // 額度用完、模型不存在、忙線 → 換下一個模型
-      if (res.status === 429) { lastErr = new SimError("RATE", ERROR_TEXT.RATE); continue; }
-      if (res.status === 404) { lastErr = new SimError("OTHER", `模型 ${model} 無法使用`); continue; }
-      if (res.status >= 500) { lastErr = new SimError("OVERLOAD", ERROR_TEXT.OVERLOAD); continue; }
-      throw new SimError("OTHER", `${ERROR_TEXT.OTHER}（${res.status}）${detail ? "：" + detail.slice(0, 120) : ""}`);
-    }
-
-    const data = await res.json();
-    const text = (data?.candidates?.[0]?.content?.parts || [])
-      .filter((p: any) => !p.thought && typeof p.text === "string")
-      .map((p: any) => p.text)
-      .join("");
-    try {
-      input = JSON.parse(text);
-    } catch {
-      lastErr = new SimError("OTHER", "回傳的格式不完整，再按一次試試");
-      continue;
-    }
-    if (input && Array.isArray(input.events)) break;
-    input = null;
-    lastErr = new SimError("OTHER", "回傳的格式不完整，再按一次試試");
+  let res: Response;
+  try {
+    res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ system, prompt: userMsg, schema: GEMINI_SCHEMA }),
+    });
+  } catch {
+    throw new SimError("NETWORK", ERROR_TEXT.NETWORK);
   }
 
-  if (!input) throw lastErr || new SimError("OTHER", ERROR_TEXT.OTHER);
+  let data: any = null;
+  try { data = await res.json(); } catch { /* ignore */ }
+
+  if (!res.ok) {
+    const code = (data?.code || "OTHER") as SimErrorCode;
+    const text = ERROR_TEXT[code] && code !== "OTHER" ? ERROR_TEXT[code] : `${ERROR_TEXT.OTHER}：${data?.message || res.status}`;
+    throw new SimError(code in ERROR_TEXT ? code : "OTHER", text);
+  }
+
+  let input: any = null;
+  try { input = JSON.parse(data?.text || ""); } catch { /* ignore */ }
+  if (!input || !Array.isArray(input.events)) throw new SimError("OTHER", "回傳的格式不完整，再按一次試試");
 
   const stamp = Date.now().toString(36);
   const events: SimulationEvent[] = input.events.map((ev: any, i: number) => ({

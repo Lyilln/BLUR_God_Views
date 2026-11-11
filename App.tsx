@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  MessageCircle, Home, Mic, Newspaper, Users, Settings as SettingsIcon, RotateCcw,
-  ArrowUp, Loader2, Sparkles, Eye, EyeOff, X, Plus, Trash2, Play, Clapperboard
+  MessageCircle, Home, Mic, Newspaper, Users, RotateCcw,
+  ArrowUp, Loader2, Sparkles, Eye, X, Plus, Trash2, Play, Clapperboard
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { SceneType, SimulationEvent, RelationshipLink } from './types';
 import { PERSONA_DATA, INITIAL_RELATIONSHIPS, MUSIC_SHOWS, VARIETY_SHOWS, FORUM_BOARDS, MEMBER_COLORS } from './constants';
-import { generateSimulation, SimError, ERROR_TEXT, getApiKey, setApiKey } from './services/gemini';
+import { generateSimulation, SimError } from './services/gemini';
 
 // ===== 設定 =====
 type Tab = 'chat' | 'daily' | 'show' | 'forum' | 'map';
@@ -104,10 +104,6 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ text: string; action?: { label: string; run: () => void } } | null>(null);
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [keyDraft, setKeyDraft] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [hasKey, setHasKey] = useState(() => !!getApiKey());
 
   const [relEdit, setRelEdit] = useState<{ index: number; draft: RelationshipLink } | null>(null);
 
@@ -138,25 +134,8 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  const openSettings = useCallback(() => {
-    setKeyDraft(getApiKey());
-    setShowKey(false);
-    setSettingsOpen(true);
-  }, []);
-
-  const saveSettings = () => {
-    setApiKey(keyDraft);
-    setHasKey(!!keyDraft.trim());
-    setSettingsOpen(false);
-    setToast({ text: keyDraft.trim() ? '設定已儲存' : '已清除 API Key' });
-  };
-
   const run = useCallback(async (custom?: string) => {
     if (busy || scene === 'relationship_map') return;
-    if (!getApiKey()) {
-      setToast({ text: ERROR_TEXT.NO_KEY, action: { label: '去設定', run: openSettings } });
-      return;
-    }
     const cmd = custom ?? command;
     setBusy(true);
     setCommand('');
@@ -177,15 +156,14 @@ export default function App() {
       console.error(e);
       setCommand(cmd);
       if (e instanceof SimError) {
-        const needSettings = e.code === 'NO_KEY' || e.code === 'BAD_KEY';
-        setToast({ text: e.message, action: needSettings ? { label: '去設定', run: openSettings } : undefined });
+        setToast({ text: e.message });
       } else {
         setToast({ text: `生成失敗：${String((e as Error)?.message || e).slice(0, 80)}` });
       }
     } finally {
       setBusy(false);
     }
-  }, [busy, scene, command, subScene, history, historyKey, relationships, dmPair, isChat, openSettings]);
+  }, [busy, scene, command, subScene, history, historyKey, relationships, dmPair, isChat]);
 
   const clearScene = () => {
     if (!events.length) return;
@@ -337,9 +315,6 @@ export default function App() {
                 <RotateCcw size={18} />
               </button>
             )}
-            <button className={`ibtn glass ${hasKey ? '' : 'dot'}`} onClick={openSettings} aria-label="設定" title="設定">
-              <SettingsIcon size={18} />
-            </button>
           </div>
         </div>
 
@@ -498,30 +473,6 @@ export default function App() {
           );
         })}
       </nav>
-
-      {/* 設定 */}
-      <Sheet open={settingsOpen} onClose={() => setSettingsOpen(false)}>
-        <h3>設定 <button className="ibtn" onClick={() => setSettingsOpen(false)} aria-label="關閉"><X size={20} /></button></h3>
-        <p className="sub">Key 只存在這支手機的瀏覽器裡，只會直接送給 Google，不經過其他地方。</p>
-
-        <div className="field">
-          <label>Gemini API Key</label>
-          <div className="inp">
-            <input
-              type={showKey ? 'text' : 'password'} value={keyDraft} onChange={e => setKeyDraft(e.target.value)}
-              placeholder="AIza…" autoComplete="off" spellCheck={false}
-            />
-            <button className="ibtn" onClick={() => setShowKey(v => !v)} aria-label={showKey ? '隱藏' : '顯示'}>
-              {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
-          </div>
-          <span className="hint">
-            到 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">Google AI Studio</a> 免費建立 Key，不用綁卡。會自動使用免費模型，一個額度用完就換下一個。
-          </span>
-        </div>
-
-        <button className="btn" style={{ width: '100%' }} onClick={saveSettings}>儲存</button>
-      </Sheet>
 
       {/* 編輯關係 */}
       <Sheet open={!!relEdit} onClose={() => setRelEdit(null)}>
