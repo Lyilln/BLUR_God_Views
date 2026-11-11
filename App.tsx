@@ -6,10 +6,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { SceneType, SimulationEvent, RelationshipLink } from './types';
 import { PERSONA_DATA, INITIAL_RELATIONSHIPS, MUSIC_SHOWS, VARIETY_SHOWS, FORUM_BOARDS, MEMBER_COLORS } from './constants';
-import {
-  generateSimulation, SimError, ERROR_TEXT, MODELS,
-  getApiKey, setApiKey, getModel, setModel
-} from './services/claude';
+import { generateSimulation, SimError, ERROR_TEXT, getApiKey, setApiKey } from './services/gemini';
 
 // ===== 設定 =====
 type Tab = 'chat' | 'daily' | 'show' | 'forum' | 'map';
@@ -110,7 +107,6 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [keyDraft, setKeyDraft] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [modelDraft, setModelDraft] = useState(getModel());
   const [hasKey, setHasKey] = useState(() => !!getApiKey());
 
   const [relEdit, setRelEdit] = useState<{ index: number; draft: RelationshipLink } | null>(null);
@@ -144,14 +140,12 @@ export default function App() {
 
   const openSettings = useCallback(() => {
     setKeyDraft(getApiKey());
-    setModelDraft(getModel());
     setShowKey(false);
     setSettingsOpen(true);
   }, []);
 
   const saveSettings = () => {
     setApiKey(keyDraft);
-    setModel(modelDraft);
     setHasKey(!!keyDraft.trim());
     setSettingsOpen(false);
     setToast({ text: keyDraft.trim() ? '設定已儲存' : '已清除 API Key' });
@@ -508,34 +502,22 @@ export default function App() {
       {/* 設定 */}
       <Sheet open={settingsOpen} onClose={() => setSettingsOpen(false)}>
         <h3>設定 <button className="ibtn" onClick={() => setSettingsOpen(false)} aria-label="關閉"><X size={20} /></button></h3>
-        <p className="sub">Key 只存在這支手機的瀏覽器裡，只會直接送給 Claude，不經過其他地方。</p>
+        <p className="sub">Key 只存在這支手機的瀏覽器裡，只會直接送給 Google，不經過其他地方。</p>
 
         <div className="field">
-          <label>Claude API Key</label>
+          <label>Gemini API Key</label>
           <div className="inp">
             <input
               type={showKey ? 'text' : 'password'} value={keyDraft} onChange={e => setKeyDraft(e.target.value)}
-              placeholder="sk-ant-…" autoComplete="off" spellCheck={false}
+              placeholder="AIza…" autoComplete="off" spellCheck={false}
             />
             <button className="ibtn" onClick={() => setShowKey(v => !v)} aria-label={showKey ? '隱藏' : '顯示'}>
               {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
           <span className="hint">
-            到 <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">Claude Console</a> 建立 Key。API 另外計費，跟 Claude 訂閱方案是分開的。
+            到 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">Google AI Studio</a> 免費建立 Key，不用綁卡。會自動使用免費模型，一個額度用完就換下一個。
           </span>
-        </div>
-
-        <div className="field">
-          <label>模型</label>
-          <div className="models">
-            {MODELS.map(m => (
-              <button key={m.id} className={`model ${modelDraft === m.id ? 'on' : ''}`} onClick={() => setModelDraft(m.id)}>
-                <div><b>{m.label}</b><small>{m.note}</small></div>
-                <div className="rad" />
-              </button>
-            ))}
-          </div>
         </div>
 
         <button className="btn" style={{ width: '100%' }} onClick={saveSettings}>儲存</button>

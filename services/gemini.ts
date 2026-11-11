@@ -1,15 +1,11 @@
 import { SimulationBlock, SimulationEvent, SceneType, RelationshipLink } from "../types";
 import { PERSONA_DATA, WORLD_VIEW } from "../constants";
 
-// ===== 模型 =====
-export const MODELS = [
-  { id: "claude-sonnet-5-5", label: "Sonnet 5.5", note: "推薦・品質速度平衡" },
-  { id: "claude-opus-5-5", label: "Opus 5.5", note: "文筆最好・較慢較貴" },
-  { id: "claude-haiku-5-5", label: "Haiku 5.5", note: "最快最省" },
-] as const;
+// ===== 模型（全部是免費額度可用的；額度用完會自動換下一個）=====
+export const MODELS = ["gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite"];
 
-const KEY_STORE = "BLUR_CLAUDE_KEY";
-const MODEL_STORE = "BLUR_CLAUDE_MODEL";
+// 沿用舊版的儲存名稱，之前貼過的 Gemini Key 會直接生效
+const KEY_STORE = "GEMINI_API_KEY";
 
 const safeGet = (k: string) => {
   try { return localStorage.getItem(k) || ""; } catch { return ""; }
@@ -20,11 +16,9 @@ const safeSet = (k: string, v: string) => {
 
 export const getApiKey = () => safeGet(KEY_STORE).trim();
 export const setApiKey = (v: string) => safeSet(KEY_STORE, v.trim());
-export const getModel = () => safeGet(MODEL_STORE) || MODELS[0].id;
-export const setModel = (v: string) => safeSet(MODEL_STORE, v);
 
 // ===== 錯誤 =====
-export type SimErrorCode = "NO_KEY" | "BAD_KEY" | "NO_CREDIT" | "RATE" | "OVERLOAD" | "NETWORK" | "OTHER";
+export type SimErrorCode = "NO_KEY" | "BAD_KEY" | "RATE" | "OVERLOAD" | "NETWORK" | "OTHER";
 
 export class SimError extends Error {
   code: SimErrorCode;
@@ -35,20 +29,16 @@ export class SimError extends Error {
 }
 
 export const ERROR_TEXT: Record<SimErrorCode, string> = {
-  NO_KEY: "還沒放 Claude API Key，先到設定貼上",
+  NO_KEY: "還沒放 Gemini API Key，先到設定貼上",
   BAD_KEY: "這把 Key 無效，請到設定重新貼上",
-  NO_CREDIT: "API 帳戶餘額不足，請到 Claude Console 儲值",
-  RATE: "請求太頻繁了，等一下再試",
-  OVERLOAD: "Claude 現在忙線中，稍後再試",
+  RATE: "免費額度暫時用完了，等一分鐘再試；如果是今天的量用完，明天會重置",
+  OVERLOAD: "Gemini 現在忙線中，稍後再試",
   NETWORK: "網路連線失敗，檢查一下網路",
   OTHER: "生成失敗",
 };
 
-// ===== 輸出格式（用 tool use 強制 Claude 回傳固定 JSON）=====
-const EMIT_TOOL = {
-  name: "emit_block",
-  description: "輸出這一輪的模擬劇情區塊。",
-  input_schema: {
+// ===== 輸出格式（JSON Schema，送出前轉成 Gemini 的格式）=====
+const OUTPUT_SCHEMA = {
     type: "object",
     properties: {
       locationLabel: { type: "string", description: "地點描述，例如「SBS 待機室」" },
@@ -98,9 +88,22 @@ const EMIT_TOOL = {
         },
       },
     },
-    required: ["locationLabel", "events"],
-  },
+  required: ["locationLabel", "events"],
 };
+
+// Gemini 的 responseSchema 用大寫型別
+function toGeminiSchema(node: any): any {
+  if (Array.isArray(node)) return node.map(toGeminiSchema);
+  if (!node || typeof node !== "object") return node;
+  const out: any = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (k === "type" && typeof v === "string") out.type = v.toUpperCase();
+    else if (k === "properties") out.properties = Object.fromEntries(Object.entries(v as any).map(([pk, pv]) => [pk, toGeminiSchema(pv)]));
+    else out[k] = toGeminiSchema(v);
+  }
+  return out;
+}
+const GEMINI_SCHEMA = toGeminiSchema(OUTPUT_SCHEMA);
 
 // ===== 提示詞 =====
 function sceneInstruction(scene: SceneType, subScene: string, dmPair: string[]): string {
@@ -184,53 +187,70 @@ ${sceneInstruction(scene, ctx.subScene || "", ctx.dmPair || [])}
 - 每位成員的說話方式要符合人設，不要每個人聽起來都一樣。
 - 接續「前情」自然推進劇情，不要重複已經發生的事。
 - 使用者給的指令是「神視干涉」：把它當成劇情裡發生的事件或方向，自然融入。
-- 用 emit_block 工具輸出，不要輸出其他文字。`;
+- 只輸出符合格式的 JSON。`;
 
   const userMsg = `前情：
 ${historyText(ctx.history)}
 
 神視干涉指令：${command.trim() || "（無，請自主推進下一段劇情）"}`;
 
-  let res: Response;
-  try {
-    res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: getModel(),
-        max_tokens: 8000,
-        system,
-        tools: [EMIT_TOOL],
-        tool_choice: { type: "tool", name: "emit_block" },
-        messages: [{ role: "user", content: userMsg }],
-      }),
-    });
-  } catch {
-    throw new SimError("NETWORK", ERROR_TEXT.NETWORK);
-  }
+  let input: any = null;
+  let lastErr: SimError | null = null;
 
-  if (!res.ok) {
-    let detail = "";
+  for (const model of MODELS) {
+    let res: Response;
     try {
-      const err = await res.json();
-      detail = err?.error?.message || "";
-    } catch { /* ignore */ }
-    if (res.status === 401 || res.status === 403) throw new SimError("BAD_KEY", ERROR_TEXT.BAD_KEY);
-    if (res.status === 429) throw new SimError("RATE", ERROR_TEXT.RATE);
-    if (res.status === 529 || res.status === 503) throw new SimError("OVERLOAD", ERROR_TEXT.OVERLOAD);
-    if (/credit|balance|billing/i.test(detail)) throw new SimError("NO_CREDIT", ERROR_TEXT.NO_CREDIT);
-    throw new SimError("OTHER", `${ERROR_TEXT.OTHER}（${res.status}）${detail ? "：" + detail : ""}`);
+      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: system }] },
+          contents: [{ role: "user", parts: [{ text: userMsg }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: GEMINI_SCHEMA,
+            temperature: 1,
+          },
+        }),
+      });
+    } catch {
+      throw new SimError("NETWORK", ERROR_TEXT.NETWORK);
+    }
+
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const err = await res.json();
+        detail = err?.error?.message || "";
+      } catch { /* ignore */ }
+      console.warn(`[BLUR] ${model} ${res.status}`, detail);
+      if (res.status === 403 || /API_KEY_INVALID|API key not valid/i.test(detail)) {
+        throw new SimError("BAD_KEY", ERROR_TEXT.BAD_KEY);
+      }
+      // 額度用完、模型不存在、忙線 → 換下一個模型
+      if (res.status === 429) { lastErr = new SimError("RATE", ERROR_TEXT.RATE); continue; }
+      if (res.status === 404) { lastErr = new SimError("OTHER", `模型 ${model} 無法使用`); continue; }
+      if (res.status >= 500) { lastErr = new SimError("OVERLOAD", ERROR_TEXT.OVERLOAD); continue; }
+      throw new SimError("OTHER", `${ERROR_TEXT.OTHER}（${res.status}）${detail ? "：" + detail.slice(0, 120) : ""}`);
+    }
+
+    const data = await res.json();
+    const text = (data?.candidates?.[0]?.content?.parts || [])
+      .filter((p: any) => !p.thought && typeof p.text === "string")
+      .map((p: any) => p.text)
+      .join("");
+    try {
+      input = JSON.parse(text);
+    } catch {
+      lastErr = new SimError("OTHER", "回傳的格式不完整，再按一次試試");
+      continue;
+    }
+    if (input && Array.isArray(input.events)) break;
+    input = null;
+    lastErr = new SimError("OTHER", "回傳的格式不完整，再按一次試試");
   }
 
-  const data = await res.json();
-  const block = (data?.content || []).find((b: any) => b.type === "tool_use");
-  const input = block?.input;
-  if (!input || !Array.isArray(input.events)) throw new SimError("OTHER", "Claude 回傳的格式不完整，再按一次試試");
+  if (!input) throw lastErr || new SimError("OTHER", ERROR_TEXT.OTHER);
 
   const stamp = Date.now().toString(36);
   const events: SimulationEvent[] = input.events.map((ev: any, i: number) => ({
