@@ -154,12 +154,10 @@ function nowText(): string {
 
 export type Lore = { group: string; members: Record<string, string> };
 
-// ===== 主函式 =====
-export async function generateSimulation(
-  scene: SceneType,
-  command: string,
-  ctx: { subScene?: string; history?: SimulationEvent[]; relationships?: RelationshipLink[]; dmPair?: string[]; elsewhere?: string[]; lore?: Lore }
-): Promise<SimulationBlock> {
+
+type Ctx = { subScene?: string; history?: SimulationEvent[]; relationships?: RelationshipLink[]; dmPair?: string[]; elsewhere?: string[]; lore?: Lore };
+
+function buildSystem(sceneText: string, ctx: Ctx): string {
   const personas = Object.values(PERSONA_DATA)
     .map(p => {
       const extra = ctx.lore?.members?.[p.name]?.trim();
@@ -181,7 +179,7 @@ ${personas}
 目前關係：
 ${rels || "（標準關係）"}
 
-${sceneInstruction(scene, ctx.subScene || "", ctx.dmPair || [])}
+${sceneText}
 
 現在時間：${nowText()}
 
@@ -206,17 +204,10 @@ ${sceneInstruction(scene, ctx.subScene || "", ctx.dmPair || [])}
 - 不要刻意把句子拆短或拉長製造節奏，照人物和情境自然說話；正常的文學表達可以保留。
 - 保留既有人物設定、時間線、產業背景和感情發展，前後連貫。
 - 只輸出符合格式的 JSON。`;
+  return system;
+}
 
-  const elsewhere = (ctx.elsewhere || []).length ? ctx.elsewhere!.join("\n") : "（無）";
-
-  const userMsg = `其他場景最近發生的事：
-${elsewhere}
-
-這個場景的前情：
-${historyText(ctx.history)}
-
-神視干涉指令：${command.trim() || "（無，請自主推進下一段劇情）"}`;
-
+async function callApi(system: string, userMsg: string, schema: unknown): Promise<any> {
   let res: Response;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 150000);
@@ -225,7 +216,7 @@ ${historyText(ctx.history)}
       method: "POST",
       signal: ctrl.signal,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ system, prompt: userMsg, schema: GEMINI_SCHEMA }),
+      body: JSON.stringify({ system, prompt: userMsg, schema }),
     });
   } catch (e) {
     clearTimeout(timer);
@@ -245,6 +236,31 @@ ${historyText(ctx.history)}
 
   let input: any = null;
   try { input = JSON.parse(data?.text || ""); } catch { /* ignore */ }
+  if (!input) throw new SimError("OTHER", "回傳的格式不完整，再按一次試試");
+  return input;
+
+}
+
+// ===== 主函式 =====
+export type { Ctx };
+export async function generateSimulation(
+  scene: SceneType,
+  command: string,
+  ctx: Ctx
+): Promise<SimulationBlock> {
+  const system = buildSystem(sceneInstruction(scene, ctx.subScene || "", ctx.dmPair || []), ctx);
+
+  const elsewhere = (ctx.elsewhere || []).length ? ctx.elsewhere!.join("\n") : "（無）";
+
+  const userMsg = `其他場景最近發生的事：
+${elsewhere}
+
+這個場景的前情：
+${historyText(ctx.history)}
+
+神視干涉指令：${command.trim() || "（無，請自主推進下一段劇情）"}`;
+
+  const input = await callApi(system, userMsg, GEMINI_SCHEMA);
   if (!input || !Array.isArray(input.events)) throw new SimError("OTHER", "回傳的格式不完整，再按一次試試");
 
   const stamp = Date.now().toString(36);
@@ -266,4 +282,95 @@ ${historyText(ctx.history)}
     scene: { sceneId: stamp, sceneType: scene, locationLabel: String(input.locationLabel || ""), subScene: ctx.subScene },
     events,
   };
+}
+
+// ===== 論壇（仿 theqoo）=====
+const REPLY_SCHEMA = {
+  type: "object",
+  properties: {
+    author: { type: "string", description: "匿名暱稱，例如：匿名的BLUR粉、路過的、某個推Nanae的" },
+    text: { type: "string" },
+    type: { type: "string", enum: ["fan", "hater", "neutral", "shipper", "mom_fan"] },
+    to: { type: "integer", description: "回覆第幾樓留言；不是回覆別人就填 0" },
+  },
+  required: ["author", "text", "type"],
+};
+const LIST_SCHEMA = toGeminiSchema({
+  type: "object",
+  properties: {
+    posts: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          text: { type: "string" },
+          views: { type: "integer" },
+          replies: { type: "array", items: REPLY_SCHEMA },
+        },
+        required: ["title", "text", "replies"],
+      },
+    },
+  },
+  required: ["posts"],
+});
+const REPLIES_SCHEMA = toGeminiSchema({
+  type: "object",
+  properties: { replies: { type: "array", items: REPLY_SCHEMA } },
+  required: ["replies"],
+});
+
+const FORUM_STYLE = `論壇風格參考韓國 theqoo：匿名、短句、口語、愛用梗和縮寫（ㅋㅋ、ㅠㅠ、真的瘋了、我先哭），會貼「[截圖]」「[動圖]」描述，標題常帶【】或 (+)、(*分析)。
+留言要像真人在吵、在笑、在接梗：有人只回一個字、有人長篇分析、有人歪樓、有人回覆特定樓層，黑粉和理性粉會互嗆。不要每則留言都在誇。`;
+
+const mkReplies = (arr: any[], stamp: string) =>
+  (Array.isArray(arr) ? arr : []).map((r: any, j: number) => ({
+    id: `${stamp}-${j}`, author: String(r.author || "匿名"), text: String(r.text || ""),
+    type: r.type || "neutral", to: Number(r.to) || 0,
+  }));
+
+const postText = (p: SimulationEvent) => {
+  const c = p.content || {};
+  const rs = (c.replies || []).slice(-30).map((r: any, i: number) => `${i + 1}樓 ${r.author}${r.mine ? "（樓主本人/使用者）" : ""}：${r.text}`).join("\n");
+  return `標題：${c.title}\n作者：${c.speaker}${(c as any).mine ? "（使用者本人）" : ""}\n內文：${c.text}\n\n留言：\n${rs || "（還沒有）"}`;
+};
+
+// 別人的新文章（或使用者自己發的文章）
+export async function generateForumPosts(
+  board: string, ctx: Ctx, existing: SimulationEvent[], mine?: { title: string; text: string }
+): Promise<SimulationEvent[]> {
+  const scene = mine
+    ? `場景：粉絲論壇【${board}】。使用者剛發了一篇文，請只輸出 1 篇 post（標題和內文照使用者寫的原樣），並產生 6–15 則其他網友的留言反應。`
+    : `場景：粉絲論壇【${board}】。產生 5 篇不同網友的新文章，題材要分散（舞台、私下互動、八卦、梗圖、爭議、求問），內容呼應其他場景最近發生的事。每篇附 3–15 則留言，views 填合理的瀏覽數。`;
+  const system = buildSystem(scene + "\n" + FORUM_STYLE, ctx);
+  const titles = existing.slice(-15).map(p => p.content?.title).filter(Boolean).join("、");
+  const userMsg = `其他場景最近發生的事：\n${(ctx.elsewhere || []).join("\n") || "（無）"}\n\n板上已經有的文章（不要重複）：${titles || "（無）"}${
+    mine ? `\n\n使用者的文章：\n標題：${mine.title}\n內文：${mine.text}` : ""}`;
+  const out = await callApi(system, userMsg, LIST_SCHEMA);
+  const posts = Array.isArray(out?.posts) ? out.posts : [];
+  if (!posts.length) throw new SimError("OTHER", "回傳的格式不完整，再按一次試試");
+  const now = new Date();
+  const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  return posts.map((p: any, i: number) => {
+    const stamp = `${Date.now().toString(36)}${i}`;
+    return {
+      eventId: stamp, ts: hhmm, eventType: "forum_post", participants: [],
+      content: {
+        title: mine ? mine.title : String(p.title || ""), text: mine ? mine.text : String(p.text || ""),
+        speaker: mine ? "我" : "匿名的BLUR粉", board,
+        replies: mkReplies(p.replies, stamp),
+        views: mine ? 1 : Number(p.views) || Math.floor(200 + Math.random() * 3000),
+        likes: mine ? 0 : Math.floor(Math.random() * 60), mine: !!mine,
+      } as any,
+    };
+  });
+}
+
+// 使用者留言後，其他網友的反應（或打開沒什麼留言的文章時補留言）
+export async function generateForumReplies(board: string, ctx: Ctx, post: SimulationEvent, myComment?: string) {
+  const scene = `場景：粉絲論壇【${board}】的一篇文章底下。${
+    myComment ? "使用者剛留了最後一則留言，產生 3–8 則新留言：有人直接回覆使用者（to 填使用者那樓的樓層），也有人繼續原本的話題。" : "產生 4–10 則新留言，接續現有討論。"}`;
+  const system = buildSystem(scene + "\n" + FORUM_STYLE, ctx);
+  const out = await callApi(system, postText(post), REPLIES_SCHEMA);
+  return mkReplies(out?.replies, Date.now().toString(36));
 }

@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { SceneType, SimulationEvent, RelationshipLink } from './types';
 import { PERSONA_DATA, INITIAL_RELATIONSHIPS, MUSIC_SHOWS, VARIETY_SHOWS, FORUM_BOARDS, MEMBER_COLORS } from './constants';
 import { generateSimulation, SimError, Lore } from './services/gemini';
+import Forum from './components/Forum';
 
 // ===== 設定 =====
 type Tab = 'chat' | 'daily' | 'show' | 'forum' | 'map';
@@ -427,6 +428,14 @@ export default function App() {
             </button>
           </div>
         </div>
+      ) : tab === 'forum' ? (
+        <Forum
+          board={subScene}
+          posts={events}
+          setPosts={fn => setHistory(p => ({ ...p, [historyKey]: fn(p[historyKey] || []) }))}
+          makeCtx={() => ({ subScene, relationships, lore, elsewhere: elsewhereLines(history, historyKey) })}
+          toast={text => setToast({ text })}
+        />
       ) : (
         <div className="feed" key="feed" ref={feedRef}>
           <div className="feed-in">
@@ -462,7 +471,7 @@ export default function App() {
       )}
 
       {/* 輸入列 */}
-      {tab !== 'map' && (
+      {tab !== 'map' && tab !== 'forum' && (
         <div className="composer">
           {scene === 'dm' && (
             <div className="dm-pick">

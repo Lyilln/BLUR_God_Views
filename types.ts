@@ -8,6 +8,8 @@ export interface ForumReply {
   author: string;
   text: string;
   type: 'fan' | 'hater' | 'neutral' | 'shipper' | 'mom_fan';
+  to?: number;
+  mine?: boolean;
 }
 
 export interface EventContent {
@@ -28,6 +30,10 @@ export interface EventContent {
   title?: string;
   replies?: ForumReply[];
   board?: string;
+  views?: number;
+  likes?: number;
+  liked?: boolean;
+  mine?: boolean;
 }
 
 export interface SimulationEvent {
