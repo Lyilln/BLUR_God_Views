@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  MessageCircle, Home, Mic, Newspaper, Users, RotateCcw,
+  MessageCircle, Home, Mic, Newspaper, Users, RotateCcw, BookOpen,
   ArrowUp, Loader2, Sparkles, Eye, X, Plus, Trash2, Play, Clapperboard
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { SceneType, SimulationEvent, RelationshipLink } from './types';
 import { PERSONA_DATA, INITIAL_RELATIONSHIPS, MUSIC_SHOWS, VARIETY_SHOWS, FORUM_BOARDS, MEMBER_COLORS } from './constants';
-import { generateSimulation, SimError } from './services/gemini';
+import { generateSimulation, SimError, Lore } from './services/gemini';
 
 // ===== 設定 =====
 type Tab = 'chat' | 'daily' | 'show' | 'forum' | 'map';
@@ -118,7 +118,10 @@ export default function App() {
   const [relationships, setRelationships] = useState<RelationshipLink[]>(() => load('blur_v8_rel', INITIAL_RELATIONSHIPS));
   const [nodes, setNodes] = useState(() => load('blur_v9_nodes', initialNodes()));
   const [command, setCommand] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [busyKeys, setBusyKeys] = useState<string[]>([]);
+  const [lore, setLore] = useState<Lore>(() => load('blur_v9_lore', { group: '', members: {} }));
+  const [loreOpen, setLoreOpen] = useState(false);
+  const [loreDraft, setLoreDraft] = useState<Lore>({ group: '', members: {} });
   const [toast, setToast] = useState<{ text: string; action?: { label: string; run: () => void } } | null>(null);
 
 
@@ -132,11 +135,13 @@ export default function App() {
   const historyKey = scene === 'dm' ? `dm:${[...dmPair].sort().join('-')}` : (subScene || scene);
   const events = history[historyKey] || [];
   const isChat = scene === 'group_chat' || scene === 'dm';
+  const busy = busyKeys.includes(historyKey);
 
   // 儲存
   useEffect(() => save('blur_v8_history', history), [history]);
   useEffect(() => save('blur_v8_rel', relationships), [relationships]);
   useEffect(() => save('blur_v9_nodes', nodes), [nodes]);
+  useEffect(() => save('blur_v9_lore', lore), [lore]);
 
   // 新內容自動捲到底
   useEffect(() => {
@@ -154,12 +159,14 @@ export default function App() {
   const run = useCallback(async (custom?: string) => {
     if (busy || scene === 'relationship_map') return;
     const cmd = custom ?? command;
-    setBusy(true);
+    const key = historyKey;
+    setBusyKeys(p => [...p, key]);
     setCommand('');
     try {
       const block = await generateSimulation(scene, cmd, {
         subScene, history: history[historyKey], relationships, dmPair: scene === 'dm' ? dmPair : undefined,
         elsewhere: elsewhereLines(history, historyKey),
+        lore,
       });
       const add: SimulationEvent[] = [];
       if (!isChat && block.scene.locationLabel) {
@@ -169,7 +176,7 @@ export default function App() {
         });
       }
       add.push(...block.events);
-      setHistory(p => ({ ...p, [historyKey]: [...(p[historyKey] || []), ...add] }));
+      setHistory(p => ({ ...p, [key]: [...(p[key] || []), ...add] }));
     } catch (e) {
       console.error(e);
       setCommand(cmd);
@@ -179,9 +186,9 @@ export default function App() {
         setToast({ text: `生成失敗：${String((e as Error)?.message || e).slice(0, 80)}` });
       }
     } finally {
-      setBusy(false);
+      setBusyKeys(p => p.filter(k => k !== key));
     }
-  }, [busy, scene, command, subScene, history, historyKey, relationships, dmPair, isChat]);
+  }, [busy, scene, command, subScene, history, historyKey, relationships, dmPair, isChat, lore]);
 
   const clearScene = () => {
     if (!events.length) return;
@@ -333,6 +340,9 @@ export default function App() {
                 <RotateCcw size={18} />
               </button>
             )}
+            <button className="ibtn glass" onClick={() => { setLoreDraft(lore); setLoreOpen(true); }} aria-label="設定集" title="設定集">
+              <BookOpen size={18} />
+            </button>
           </div>
         </div>
 
@@ -491,6 +501,27 @@ export default function App() {
           );
         })}
       </nav>
+
+      {/* 設定集 */}
+      <Sheet open={loreOpen} onClose={() => setLoreOpen(false)}>
+        <h3>設定集 <button className="ibtn" onClick={() => setLoreOpen(false)} aria-label="關閉"><X size={20} /></button></h3>
+        <p className="sub">寫在這裡的設定，之後每一輪生成都會照著演。零散的也沒關係，想到什麼就寫什麼。</p>
+        <div className="field">
+          <label>團體現況・世界觀</label>
+          <textarea className="ta" style={{ minHeight: 110 }} value={loreDraft.group}
+            placeholder="出道多久、主打歌名、粉絲名、現在是回歸期還是空窗期、公司狀況…"
+            onChange={e => { const v = e.target.value; setLoreDraft(d => ({ ...d, group: v })); }} />
+        </div>
+        {MEMBERS.map(n => (
+          <div className="field" key={n}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Avatar name={n} size="xs" />{n}</label>
+            <textarea className="ta" value={loreDraft.members[n] || ''}
+              placeholder="口頭禪、說話範例、私人梗、舊帳、最近在煩惱什麼…"
+              onChange={e => { const v = e.target.value; setLoreDraft(d => ({ ...d, members: { ...d.members, [n]: v } })); }} />
+          </div>
+        ))}
+        <button className="btn" style={{ width: '100%' }} onClick={() => { setLore(loreDraft); setLoreOpen(false); setToast({ text: '設定集已儲存' }); }}>儲存</button>
+      </Sheet>
 
       {/* 編輯關係 */}
       <Sheet open={!!relEdit} onClose={() => setRelEdit(null)}>

@@ -57,23 +57,37 @@ Deno.serve(async (req) => {
 
   let last = { status: 500, code: "OTHER", message: "生成失敗" };
 
+  const call = (model: string, thinking: boolean) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60000);
+    return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 1,
+          // 思考量調低，生成快很多
+          ...(thinking ? { thinkingConfig: { thinkingLevel: "low" } } : {}),
+          ...(schema ? { responseMimeType: "application/json", responseSchema: schema } : {}),
+        },
+      }),
+    }).finally(() => clearTimeout(timer));
+  };
+
   for (const model of MODELS) {
     let res: Response;
     try {
-      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: system }] },
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 1,
-            ...(schema ? { responseMimeType: "application/json", responseSchema: schema } : {}),
-          },
-        }),
-      });
+      res = await call(model, true);
+      // 這個模型不支援思考設定 → 不帶設定再試一次
+      if (res.status === 400) {
+        const peek = await res.clone().text();
+        if (/thinking/i.test(peek)) res = await call(model, false);
+      }
     } catch {
-      last = { status: 502, code: "OVERLOAD", message: "連不到 Gemini" };
+      last = { status: 504, code: "OVERLOAD", message: "Gemini 回應太慢" };
       continue;
     }
 

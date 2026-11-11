@@ -152,15 +152,21 @@ function nowText(): string {
   return `${d.getMonth() + 1} 月 ${d.getDate()} 日（週${w}）${part} ${String(hh).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}。時間戳記與場景氣氛要符合這個時段。`;
 }
 
+export type Lore = { group: string; members: Record<string, string> };
+
 // ===== 主函式 =====
 export async function generateSimulation(
   scene: SceneType,
   command: string,
-  ctx: { subScene?: string; history?: SimulationEvent[]; relationships?: RelationshipLink[]; dmPair?: string[]; elsewhere?: string[] }
+  ctx: { subScene?: string; history?: SimulationEvent[]; relationships?: RelationshipLink[]; dmPair?: string[]; elsewhere?: string[]; lore?: Lore }
 ): Promise<SimulationBlock> {
   const personas = Object.values(PERSONA_DATA)
-    .map(p => `- ${p.name}（${p.role}）：${p.traits} 說話：${p.speech} ${p.relationship}`)
+    .map(p => {
+      const extra = ctx.lore?.members?.[p.name]?.trim();
+      return `- ${p.name}（${p.role}）：${p.traits} 說話：${p.speech} ${p.relationship}${extra ? `\n  補充設定：${extra}` : ""}`;
+    })
     .join("\n");
+  const groupLore = ctx.lore?.group?.trim();
 
   const rels = (ctx.relationships || [])
     .map(r => `- ${r.from} → ${r.to}：${r.type}（${r.level}%）${r.note}`)
@@ -169,7 +175,7 @@ export async function generateSimulation(
   const system = `你是「BLUR GOD VIEW」模擬引擎，用上帝視角觀察虛擬女團 BLUR 的日常、舞台與綜藝。
 世界觀：${WORLD_VIEW.concept}。音樂風格：${WORLD_VIEW.music_style}
 
-成員：
+${groupLore ? `團體現況與補充設定（以這裡為準）：\n${groupLore}\n\n` : ""}成員：
 ${personas}
 
 目前關係：
@@ -191,6 +197,14 @@ ${sceneInstruction(scene, ctx.subScene || "", ctx.dmPair || [])}
 - 對話要互相接話、有潛台詞、有人不配合；不要每個人輪流講一句感想。
 - 不需要五個人都出場。兩三個人有戲，比五個人各講一句好。
 - 禁止空泛收尾：「大家相視而笑」「氣氛很溫馨」「這就是她們的日常」「感情越來越好」這類句子一律不要寫。結尾停在一個動作、一句台詞或一個懸念。
+
+去 AI 味（同樣重要）：
+- 不用「不是A，而是B」對舉句，不用「核心是：」「事實是：」這種先下結論的冒號句。
+- 不用排比和三連並列；一句裡不要用頓號、分號串好幾件事；相鄰幾句不要同一個句型。
+- 名詞前不掛一長串修飾語，「的」不要連用。同一樣東西就用同一個詞，不要為了變化輪換同義詞。
+- 破折號少用。比喻只在真的貼切時用，不要硬套宏大意象、不要翻譯腔、不要公式化的情緒描寫（「心中湧起一股暖流」「眼眶微微泛紅」）。
+- 不要刻意把句子拆短或拉長製造節奏，照人物和情境自然說話；正常的文學表達可以保留。
+- 保留既有人物設定、時間線、產業背景和感情發展，前後連貫。
 - 只輸出符合格式的 JSON。`;
 
   const elsewhere = (ctx.elsewhere || []).length ? ctx.elsewhere!.join("\n") : "（無）";
@@ -204,15 +218,21 @@ ${historyText(ctx.history)}
 神視干涉指令：${command.trim() || "（無，請自主推進下一段劇情）"}`;
 
   let res: Response;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 150000);
   try {
     res = await fetch(API_URL, {
       method: "POST",
+      signal: ctrl.signal,
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ system, prompt: userMsg, schema: GEMINI_SCHEMA }),
     });
-  } catch {
+  } catch (e) {
+    clearTimeout(timer);
+    if ((e as Error)?.name === "AbortError") throw new SimError("OVERLOAD", "等太久沒回應，再按一次試試");
     throw new SimError("NETWORK", ERROR_TEXT.NETWORK);
   }
+  clearTimeout(timer);
 
   let data: any = null;
   try { data = await res.json(); } catch { /* ignore */ }
