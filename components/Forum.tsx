@@ -9,6 +9,8 @@ type Props = {
   setPosts: (fn: (prev: SimulationEvent[]) => SimulationEvent[]) => void;
   makeCtx: () => Ctx;
   toast: (text: string) => void;
+  listBusy: boolean;
+  setListBusy: (on: boolean) => void;
 };
 
 const fmt = (n?: number) => (n || 0).toLocaleString('en-US');
@@ -27,9 +29,8 @@ function Body({ text }: { text?: string }) {
   );
 }
 
-export default function Forum({ board, posts, setPosts, makeCtx, toast }: Props) {
+export default function Forum({ board, posts, setPosts, makeCtx, toast, listBusy, setListBusy }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
-  const [listBusy, setListBusy] = useState(false);
   const [replyBusy, setReplyBusy] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [writeOpen, setWriteOpen] = useState(false);

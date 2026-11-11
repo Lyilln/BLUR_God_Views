@@ -152,19 +152,47 @@ function nowText(): string {
   return `${d.getMonth() + 1} 月 ${d.getDate()} 日（週${w}）${part} ${String(hh).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}。時間戳記與場景氣氛要符合這個時段。`;
 }
 
-export type Lore = { group: string; members: Record<string, string> };
+export const GROUP_FIELDS = [
+  { k: "debut", label: "出道・資歷", ph: "出道日期、出道曲、得過的獎…" },
+  { k: "era", label: "目前活動期", ph: "回歸期還是空窗期、主打歌名、這次的概念…" },
+  { k: "fandom", label: "粉絲名・應援", ph: "粉絲名、應援色、應援口號…" },
+  { k: "company", label: "公司・工作人員", ph: "經紀公司、經紀人個性、宿舍分房…" },
+  { k: "world", label: "世界觀・其他", ph: "其他想讓她們照著演的設定" },
+];
+export const MEMBER_FIELDS = [
+  { k: "speech", label: "口頭禪・說話範例", ph: "她真的會講的一兩句話" },
+  { k: "habits", label: "習慣・小動作", ph: "緊張時會做什麼、生活習慣…" },
+  { k: "likes", label: "喜歡／討厭", ph: "食物、東西、事情…" },
+  { k: "bonds", label: "私人梗・舊帳", ph: "跟誰之間的梗、吵過什麼架…" },
+  { k: "now", label: "最近在煩惱・想要的", ph: "現在卡在什麼、想得到什麼…" },
+  { k: "secret", label: "秘密（粉絲不知道）", ph: "只有團員或她自己知道的事" },
+  { k: "other", label: "其他", ph: "" },
+];
+export type Lore = { group: Record<string, string>; members: Record<string, Record<string, string>> };
+
+// 舊版設定集（整段文字）轉成新格式
+export function normalizeLore(raw: any): Lore {
+  const g = raw?.group, m = raw?.members || {};
+  const members: Record<string, Record<string, string>> = {};
+  for (const [n, v] of Object.entries(m)) members[n] = typeof v === "string" ? { other: v } : (v as Record<string, string>) || {};
+  return { group: typeof g === "string" ? { world: g } : g || {}, members };
+}
 
 
-type Ctx = { subScene?: string; history?: SimulationEvent[]; relationships?: RelationshipLink[]; dmPair?: string[]; elsewhere?: string[]; lore?: Lore };
+type Ctx = { subScene?: string; history?: SimulationEvent[]; relationships?: RelationshipLink[]; dmPair?: string[]; elsewhere?: string[]; lore?: Lore; publicOnly?: boolean };
 
 function buildSystem(sceneText: string, ctx: Ctx): string {
   const personas = Object.values(PERSONA_DATA)
     .map(p => {
-      const extra = ctx.lore?.members?.[p.name]?.trim();
-      return `- ${p.name}（${p.role}）：${p.traits} 說話：${p.speech} ${p.relationship}${extra ? `\n  補充設定：${extra}` : ""}`;
+      const mf = ctx.lore?.members?.[p.name] || {};
+      const extra = MEMBER_FIELDS
+        .filter(f => mf[f.k]?.trim() && !(ctx.publicOnly && f.k === "secret"))
+        .map(f => `  ${f.label}：${mf[f.k].trim()}`).join("\n");
+      return `- ${p.name}（${p.role}）：${p.traits} 說話：${p.speech} ${p.relationship}${extra ? `\n${extra}` : ""}`;
     })
     .join("\n");
-  const groupLore = ctx.lore?.group?.trim();
+  const gf = ctx.lore?.group || {};
+  const groupLore = GROUP_FIELDS.filter(f => gf[f.k]?.trim()).map(f => `- ${f.label}：${gf[f.k].trim()}`).join("\n");
 
   const rels = (ctx.relationships || [])
     .map(r => `- ${r.from} → ${r.to}：${r.type}（${r.level}%）${r.note}`)
@@ -203,6 +231,7 @@ ${sceneText}
 - 破折號少用。比喻只在真的貼切時用，不要硬套宏大意象、不要翻譯腔、不要公式化的情緒描寫（「心中湧起一股暖流」「眼眶微微泛紅」）。
 - 不要刻意把句子拆短或拉長製造節奏，照人物和情境自然說話；正常的文學表達可以保留。
 - 保留既有人物設定、時間線、產業背景和感情發展，前後連貫。
+- 「秘密」只有成員自己或團員知道，不會被外人知道。
 - 只輸出符合格式的 JSON。`;
   return system;
 }
@@ -320,7 +349,10 @@ const REPLIES_SCHEMA = toGeminiSchema({
   required: ["replies"],
 });
 
-const FORUM_STYLE = `論壇風格參考韓國 theqoo：匿名、短句、口語、愛用梗和縮寫（ㅋㅋ、ㅠㅠ、真的瘋了、我先哭），會貼「[截圖]」「[動圖]」描述，標題常帶【】或 (+)、(*分析)。
+const FORUM_PUBLIC = `粉絲只知道公開資訊：舞台、綜藝、直播，以及成員自己公開說出或發到網路上的東西。
+宿舍、練習室、經紀公司、錄音室、團體聊天室和私訊裡發生的事，粉絲完全不知道，文章和留言裡不能出現，也不能「剛好猜中」。粉絲可以亂猜，但猜的內容要跟實際情況對不上。
+`;
+const FORUM_STYLE = FORUM_PUBLIC + `論壇風格參考韓國 theqoo：匿名、短句、口語、愛用梗和縮寫（ㅋㅋ、ㅠㅠ、真的瘋了、我先哭），會貼「[截圖]」「[動圖]」描述，標題常帶【】或 (+)、(*分析)。
 留言要像真人在吵、在笑、在接梗：有人只回一個字、有人長篇分析、有人歪樓、有人回覆特定樓層，黑粉和理性粉會互嗆。不要每則留言都在誇。`;
 
 const mkReplies = (arr: any[], stamp: string) =>
@@ -337,14 +369,15 @@ const postText = (p: SimulationEvent) => {
 
 // 別人的新文章（或使用者自己發的文章）
 export async function generateForumPosts(
-  board: string, ctx: Ctx, existing: SimulationEvent[], mine?: { title: string; text: string }
+  board: string, ctxIn: Ctx, existing: SimulationEvent[], mine?: { title: string; text: string }
 ): Promise<SimulationEvent[]> {
+  const ctx = { ...ctxIn, publicOnly: true };
   const scene = mine
     ? `場景：粉絲論壇【${board}】。使用者剛發了一篇文，請只輸出 1 篇 post（標題和內文照使用者寫的原樣），並產生 6–15 則其他網友的留言反應。`
     : `場景：粉絲論壇【${board}】。產生 5 篇不同網友的新文章，題材要分散（舞台、私下互動、八卦、梗圖、爭議、求問），內容呼應其他場景最近發生的事。每篇附 3–15 則留言，views 填合理的瀏覽數。`;
   const system = buildSystem(scene + "\n" + FORUM_STYLE, ctx);
   const titles = existing.slice(-15).map(p => p.content?.title).filter(Boolean).join("、");
-  const userMsg = `其他場景最近發生的事：\n${(ctx.elsewhere || []).join("\n") || "（無）"}\n\n板上已經有的文章（不要重複）：${titles || "（無）"}${
+  const userMsg = `最近公開發生的事：\n${(ctx.elsewhere || []).join("\n") || "（無）"}\n\n板上已經有的文章（不要重複）：${titles || "（無）"}${
     mine ? `\n\n使用者的文章：\n標題：${mine.title}\n內文：${mine.text}` : ""}`;
   const out = await callApi(system, userMsg, LIST_SCHEMA);
   const posts = Array.isArray(out?.posts) ? out.posts : [];
@@ -367,10 +400,58 @@ export async function generateForumPosts(
 }
 
 // 使用者留言後，其他網友的反應（或打開沒什麼留言的文章時補留言）
-export async function generateForumReplies(board: string, ctx: Ctx, post: SimulationEvent, myComment?: string) {
+export async function generateForumReplies(board: string, ctxIn: Ctx, post: SimulationEvent, myComment?: string) {
+  const ctx = { ...ctxIn, publicOnly: true };
   const scene = `場景：粉絲論壇【${board}】的一篇文章底下。${
     myComment ? "使用者剛留了最後一則留言，產生 3–8 則新留言：有人直接回覆使用者（to 填使用者那樓的樓層），也有人繼續原本的話題。" : "產生 4–10 則新留言，接續現有討論。"}`;
   const system = buildSystem(scene + "\n" + FORUM_STYLE, ctx);
   const out = await callApi(system, postText(post), REPLIES_SCHEMA);
   return mkReplies(out?.replies, Date.now().toString(36));
+}
+
+// ===== 直播 =====
+export type LiveLine = { id: string; kind: "say" | "act" | "chat" | "sys"; who: string; text: string; mine?: boolean };
+export type LiveSession = {
+  id: string; hosts: string[]; title: string; start: number; end?: number;
+  viewers: number; peak: number; hearts: number; lines: LiveLine[];
+};
+
+const LIVE_SCHEMA = toGeminiSchema({
+  type: "object",
+  properties: {
+    viewers: { type: "integer", description: "目前觀看人數" },
+    lines: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: ["say", "act", "chat"], description: "say=主播說話 act=主播動作 chat=粉絲留言" },
+          who: { type: "string", description: "say/act 填成員名；chat 填粉絲暱稱" },
+          text: { type: "string" },
+        },
+        required: ["kind", "who", "text"],
+      },
+    },
+  },
+  required: ["lines"],
+});
+
+export async function generateLiveSegment(
+  s: LiveSession, ctx: Ctx, opts: { opening?: boolean; closing?: boolean; topic?: string; myChats?: string[] }
+): Promise<{ viewers: number; lines: LiveLine[] }> {
+  const scene = `場景：${s.hosts.join("、")} 正在開手機直播（直播標題：${s.title}）。這是公開直播，所有粉絲都看得到。
+產生接下來大約 40 秒的直播內容，14–24 行，依時間順序：
+- say：主播說的話（口語、會跟留言互動、會念出粉絲暱稱回答問題）。act：主播的動作或鏡頭裡看到的東西（簡短）。chat：粉絲留言（約一半以上的行數，短、快、有梗，暱稱多樣）。
+- 粉絲留言只能根據直播裡看到聽到的、和公開資訊；主播可能不小心說溜嘴私下的事，粉絲會立刻抓到。
+${opts.opening ? "這是剛開播：主播在調鏡頭、等人進來、打招呼、說今天要幹嘛。" : ""}${opts.closing ? "這是最後一段：主播準備下播，跟粉絲道別，最後一行是主播說再見。" : ""}${opts.myChats?.length ? `使用者（暱稱：我）剛留言：${opts.myChats.map(c => `「${c}」`).join("、")}。主播要看到並回應至少一則（念出「我」的留言再回答）。` : ""}`;
+  const system = buildSystem(scene, ctx);
+  const recent = s.lines.slice(-40).map(l => l.kind === "chat" ? `[留言] ${l.who}：${l.text}` : l.kind === "act" ? `（${l.who}${l.text}）` : `${l.who}：${l.text}`).join("\n");
+  const userMsg = `其他場景最近發生的事：\n${(ctx.elsewhere || []).join("\n") || "（無）"}\n\n${opts.topic ? `這次直播的方向：${opts.topic}\n\n` : ""}直播到目前為止（觀看 ${s.viewers} 人）：\n${recent || "（剛開始）"}`;
+  const out = await callApi(system, userMsg, LIVE_SCHEMA);
+  const lines = (Array.isArray(out?.lines) ? out.lines : []).filter((l: any) => l?.text).map((l: any, i: number) => ({
+    id: `${Date.now().toString(36)}-${i}`, kind: ["say", "act", "chat"].includes(l.kind) ? l.kind : "chat",
+    who: String(l.who || ""), text: String(l.text),
+  }));
+  if (!lines.length) throw new SimError("OTHER", "直播訊號不穩，再試一次");
+  return { viewers: Number(out?.viewers) || s.viewers, lines };
 }

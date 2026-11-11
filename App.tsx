@@ -1,21 +1,23 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  MessageCircle, Home, Mic, Newspaper, Users, RotateCcw, BookOpen,
+  MessageCircle, Home, Mic, Newspaper, Users, RotateCcw, BookOpen, Radio,
   ArrowUp, Loader2, Sparkles, Eye, X, Plus, Trash2, Play, Clapperboard
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { SceneType, SimulationEvent, RelationshipLink } from './types';
 import { PERSONA_DATA, INITIAL_RELATIONSHIPS, MUSIC_SHOWS, VARIETY_SHOWS, FORUM_BOARDS, MEMBER_COLORS } from './constants';
-import { generateSimulation, SimError, Lore } from './services/gemini';
+import { generateSimulation, SimError, Lore, LiveSession, normalizeLore, GROUP_FIELDS, MEMBER_FIELDS } from './services/gemini';
+import Live from './components/Live';
 import Forum from './components/Forum';
 
 // ===== 設定 =====
-type Tab = 'chat' | 'daily' | 'show' | 'forum' | 'map';
+type Tab = 'chat' | 'daily' | 'show' | 'live' | 'forum' | 'map';
 
 const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number; strokeWidth?: number }>; scenes: SceneType[] }[] = [
   { id: 'chat', label: '聊天', icon: MessageCircle, scenes: ['group_chat', 'dm'] },
   { id: 'daily', label: '日常', icon: Home, scenes: ['practice_room', 'dorm', 'studio', 'company'] },
   { id: 'show', label: '舞台', icon: Mic, scenes: ['stage', 'variety'] },
+  { id: 'live', label: '直播', icon: Radio, scenes: ['live'] },
   { id: 'forum', label: '論壇', icon: Newspaper, scenes: ['forum'] },
   { id: 'map', label: '關係', icon: Users, scenes: ['relationship_map'] },
 ];
@@ -23,7 +25,7 @@ const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number;
 const SCENE_LABELS: Record<SceneType, string> = {
   group_chat: '團體聊天室', dm: '私訊', practice_room: '練習室', dorm: '宿舍',
   studio: '錄音室', company: '經紀公司', stage: '打歌舞台', variety: '綜藝',
-  forum: '粉絲論壇', relationship_map: '關係圖譜',
+  forum: '粉絲論壇', relationship_map: '關係圖譜', live: '直播',
 };
 
 const SUB_OPTIONS: Partial<Record<SceneType, string[]>> = {
@@ -52,17 +54,23 @@ const save = (key: string, v: unknown) => {
 const keyLabel = (k: string) =>
   k.startsWith('dm:') ? `私訊 ${k.slice(3).replace('-', '×')}` : (SCENE_LABELS[k as SceneType] || k);
 
-function elsewhereLines(history: Record<string, SimulationEvent[]>, currentKey: string): string[] {
+const PUBLIC_KEYS = new Set([...MUSIC_SHOWS, ...VARIETY_SHOWS, ...FORUM_BOARDS]);
+
+function elsewhereLines(history: Record<string, SimulationEvent[]>, currentKey: string, lives: LiveSession[], publicOnly = false): string[] {
   const out: string[] = [];
   for (const [k, evs] of Object.entries(history)) {
     if (k === currentKey || !evs?.length) continue;
+    if (publicOnly && !PUBLIC_KEYS.has(k)) continue; // 粉絲看不到私下的場景
     evs.filter(e => e.eventType !== 'scene_change').slice(-4).forEach(e => {
       const c = e.content || {};
       const body = e.eventType === 'forum_post' ? `論壇文〈${c.title || ''}〉` : `${c.speaker ? c.speaker + '：' : ''}${c.text || c.action || ''}`;
       if (body.trim()) out.push(`[${keyLabel(k)}] ${body.slice(0, 70)}`);
     });
   }
-  return out.slice(-24);
+  lives.slice(-2).forEach(l => {
+    l.lines.filter(x => x.kind === 'say').slice(-4).forEach(x => out.push(`[直播「${l.title}」] ${x.who}：${x.text.slice(0, 70)}`));
+  });
+  return out.slice(-28);
 }
 
 const initialNodes = () => {
@@ -111,7 +119,7 @@ function Sheet({ open, onClose, children }: { open: boolean; onClose: () => void
 export default function App() {
   const [tab, setTab] = useState<Tab>('chat');
   const [tabScene, setTabScene] = useState<Record<Tab, SceneType>>({
-    chat: 'group_chat', daily: 'practice_room', show: 'stage', forum: 'forum', map: 'relationship_map',
+    chat: 'group_chat', daily: 'practice_room', show: 'stage', live: 'live', forum: 'forum', map: 'relationship_map',
   });
   const [subScenes, setSubScenes] = useState<Partial<Record<SceneType, string>>>({});
   const [dmPair, setDmPair] = useState<string[]>(['Chloe', 'RAHI']);
@@ -120,9 +128,11 @@ export default function App() {
   const [nodes, setNodes] = useState(() => load('blur_v9_nodes', initialNodes()));
   const [command, setCommand] = useState('');
   const [busyKeys, setBusyKeys] = useState<string[]>([]);
-  const [lore, setLore] = useState<Lore>(() => load('blur_v9_lore', { group: '', members: {} }));
+  const [lore, setLore] = useState<Lore>(() => normalizeLore(load('blur_v9_lore', {})));
+  const [lives, setLives] = useState<LiveSession[]>(() => load('blur_v9_live', []));
+  const [loreTab, setLoreTab] = useState('團體');
   const [loreOpen, setLoreOpen] = useState(false);
-  const [loreDraft, setLoreDraft] = useState<Lore>({ group: '', members: {} });
+  const [loreDraft, setLoreDraft] = useState<Lore>({ group: {}, members: {} });
   const [toast, setToast] = useState<{ text: string; action?: { label: string; run: () => void } } | null>(null);
 
 
@@ -143,6 +153,7 @@ export default function App() {
   useEffect(() => save('blur_v8_rel', relationships), [relationships]);
   useEffect(() => save('blur_v9_nodes', nodes), [nodes]);
   useEffect(() => save('blur_v9_lore', lore), [lore]);
+  useEffect(() => save('blur_v9_live', lives), [lives]);
 
   // 新內容自動捲到底
   useEffect(() => {
@@ -166,7 +177,7 @@ export default function App() {
     try {
       const block = await generateSimulation(scene, cmd, {
         subScene, history: history[historyKey], relationships, dmPair: scene === 'dm' ? dmPair : undefined,
-        elsewhere: elsewhereLines(history, historyKey),
+        elsewhere: elsewhereLines(history, historyKey, lives),
         lore,
       });
       const add: SimulationEvent[] = [];
@@ -336,7 +347,7 @@ export default function App() {
             <small>{SCENE_LABELS[scene]}{scene === 'dm' ? ` · ${dmPair.join(' × ')}` : subScene ? ` · ${subScene}` : ''}</small>
           </div>
           <div className="top-btns">
-            {tab !== 'map' && (
+            {tab !== 'map' && tab !== 'live' && (
               <button className="ibtn glass" onClick={clearScene} aria-label="清空本頁紀錄" title="清空本頁紀錄">
                 <RotateCcw size={18} />
               </button>
@@ -433,7 +444,17 @@ export default function App() {
           board={subScene}
           posts={events}
           setPosts={fn => setHistory(p => ({ ...p, [historyKey]: fn(p[historyKey] || []) }))}
-          makeCtx={() => ({ subScene, relationships, lore, elsewhere: elsewhereLines(history, historyKey) })}
+          makeCtx={() => ({ subScene, relationships, lore, elsewhere: elsewhereLines(history, historyKey, lives, true) })}
+          toast={text => setToast({ text })}
+          listBusy={busyKeys.includes(`forum:${historyKey}`)}
+          setListBusy={on => { const k = `forum:${historyKey}`; setBusyKeys(p => on ? [...p, k] : p.filter(x => x !== k)); }}
+        />
+      ) : tab === 'live' ? (
+        <Live
+          sessions={lives}
+          setSessions={setLives}
+          members={MEMBERS}
+          makeCtx={() => ({ relationships, lore, elsewhere: elsewhereLines(history, '', [], false) })}
           toast={text => setToast({ text })}
         />
       ) : (
@@ -471,7 +492,7 @@ export default function App() {
       )}
 
       {/* 輸入列 */}
-      {tab !== 'map' && tab !== 'forum' && (
+      {tab !== 'map' && tab !== 'forum' && tab !== 'live' && (
         <div className="composer">
           {scene === 'dm' && (
             <div className="dm-pick">
@@ -515,20 +536,26 @@ export default function App() {
       <Sheet open={loreOpen} onClose={() => setLoreOpen(false)}>
         <h3>設定集 <button className="ibtn" onClick={() => setLoreOpen(false)} aria-label="關閉"><X size={20} /></button></h3>
         <p className="sub">寫在這裡的設定，之後每一輪生成都會照著演。零散的也沒關係，想到什麼就寫什麼。</p>
-        <div className="field">
-          <label>團體現況・世界觀</label>
-          <textarea className="ta" style={{ minHeight: 110 }} value={loreDraft.group}
-            placeholder="出道多久、主打歌名、粉絲名、現在是回歸期還是空窗期、公司狀況…"
-            onChange={e => { const v = e.target.value; setLoreDraft(d => ({ ...d, group: v })); }} />
+        <div className="chips" style={{ margin: '0 -20px 14px', padding: '0 20px' }}>
+          {['團體', ...MEMBERS].map(t => (
+            <button key={t} className={`chip sm ${loreTab === t ? 'on' : ''}`} onClick={() => setLoreTab(t)}>{t}</button>
+          ))}
         </div>
-        {MEMBERS.map(n => (
-          <div className="field" key={n}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Avatar name={n} size="xs" />{n}</label>
-            <textarea className="ta" value={loreDraft.members[n] || ''}
-              placeholder="口頭禪、說話範例、私人梗、舊帳、最近在煩惱什麼…"
-              onChange={e => { const v = e.target.value; setLoreDraft(d => ({ ...d, members: { ...d.members, [n]: v } })); }} />
-          </div>
-        ))}
+        {(loreTab === '團體' ? GROUP_FIELDS : MEMBER_FIELDS).map(f => {
+          const val = loreTab === '團體' ? loreDraft.group[f.k] : loreDraft.members[loreTab]?.[f.k];
+          return (
+            <div className="field" key={loreTab + f.k}>
+              <label>{f.label}</label>
+              <textarea className="ta" value={val || ''} placeholder={f.ph}
+                onChange={e => {
+                  const v = e.target.value;
+                  setLoreDraft(d => loreTab === '團體'
+                    ? { ...d, group: { ...d.group, [f.k]: v } }
+                    : { ...d, members: { ...d.members, [loreTab]: { ...(d.members[loreTab] || {}), [f.k]: v } } });
+                }} />
+            </div>
+          );
+        })}
         <button className="btn" style={{ width: '100%' }} onClick={() => { setLore(loreDraft); setLoreOpen(false); setToast({ text: '設定集已儲存' }); }}>儲存</button>
       </Sheet>
 

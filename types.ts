@@ -1,5 +1,5 @@
 
-export type SceneType = 'group_chat' | 'dm' | 'practice_room' | 'dorm' | 'stage' | 'variety' | 'company' | 'studio' | 'forum' | 'relationship_map';
+export type SceneType = 'group_chat' | 'dm' | 'practice_room' | 'dorm' | 'stage' | 'variety' | 'company' | 'studio' | 'forum' | 'relationship_map' | 'live';
 
 export type EventType = 'message' | 'action' | 'stage_moment' | 'variety_beat' | 'scene_change' | 'system_note' | 'forum_post' | 'forum_reply';
 
